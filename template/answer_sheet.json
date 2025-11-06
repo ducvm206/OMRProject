@@ -1,0 +1,379 @@
+{
+  "page_1": {
+    "png_path": null,
+    "image_dimensions": {
+      "width": 2550,
+      "height": 3300,
+      "dpi": 300
+    },
+    "questions_detected": 10,
+    "questions": [
+      {
+        "question_number": 1,
+        "bounding_box": {
+          "x_min": 332,
+          "x_max": 620,
+          "y_min": 382,
+          "y_max": 382,
+          "avg_radius": 35
+        },
+        "bubbles": [
+          {
+            "label": "A",
+            "x": 332,
+            "y": 382,
+            "radius": 35
+          },
+          {
+            "label": "B",
+            "x": 428,
+            "y": 382,
+            "radius": 35
+          },
+          {
+            "label": "C",
+            "x": 524,
+            "y": 382,
+            "radius": 35
+          },
+          {
+            "label": "D",
+            "x": 620,
+            "y": 382,
+            "radius": 35
+          }
+        ]
+      },
+      {
+        "question_number": 2,
+        "bounding_box": {
+          "x_min": 332,
+          "x_max": 620,
+          "y_min": 528,
+          "y_max": 528,
+          "avg_radius": 35
+        },
+        "bubbles": [
+          {
+            "label": "A",
+            "x": 332,
+            "y": 528,
+            "radius": 35
+          },
+          {
+            "label": "B",
+            "x": 428,
+            "y": 528,
+            "radius": 35
+          },
+          {
+            "label": "C",
+            "x": 524,
+            "y": 528,
+            "radius": 35
+          },
+          {
+            "label": "D",
+            "x": 620,
+            "y": 528,
+            "radius": 35
+          }
+        ]
+      },
+      {
+        "question_number": 3,
+        "bounding_box": {
+          "x_min": 332,
+          "x_max": 620,
+          "y_min": 674,
+          "y_max": 674,
+          "avg_radius": 35
+        },
+        "bubbles": [
+          {
+            "label": "A",
+            "x": 332,
+            "y": 674,
+            "radius": 35
+          },
+          {
+            "label": "B",
+            "x": 428,
+            "y": 674,
+            "radius": 35
+          },
+          {
+            "label": "C",
+            "x": 524,
+            "y": 674,
+            "radius": 35
+          },
+          {
+            "label": "D",
+            "x": 620,
+            "y": 674,
+            "radius": 35
+          }
+        ]
+      },
+      {
+        "question_number": 4,
+        "bounding_box": {
+          "x_min": 332,
+          "x_max": 620,
+          "y_min": 820,
+          "y_max": 820,
+          "avg_radius": 35
+        },
+        "bubbles": [
+          {
+            "label": "A",
+            "x": 332,
+            "y": 820,
+            "radius": 35
+          },
+          {
+            "label": "B",
+            "x": 428,
+            "y": 820,
+            "radius": 35
+          },
+          {
+            "label": "C",
+            "x": 524,
+            "y": 820,
+            "radius": 35
+          },
+          {
+            "label": "D",
+            "x": 620,
+            "y": 820,
+            "radius": 35
+          }
+        ]
+      },
+      {
+        "question_number": 5,
+        "bounding_box": {
+          "x_min": 1043,
+          "x_max": 1331,
+          "y_min": 382,
+          "y_max": 382,
+          "avg_radius": 35
+        },
+        "bubbles": [
+          {
+            "label": "A",
+            "x": 1043,
+            "y": 382,
+            "radius": 35
+          },
+          {
+            "label": "B",
+            "x": 1139,
+            "y": 382,
+            "radius": 35
+          },
+          {
+            "label": "C",
+            "x": 1235,
+            "y": 382,
+            "radius": 35
+          },
+          {
+            "label": "D",
+            "x": 1331,
+            "y": 382,
+            "radius": 35
+          }
+        ]
+      },
+      {
+        "question_number": 6,
+        "bounding_box": {
+          "x_min": 1043,
+          "x_max": 1331,
+          "y_min": 528,
+          "y_max": 528,
+          "avg_radius": 35
+        },
+        "bubbles": [
+          {
+            "label": "A",
+            "x": 1043,
+            "y": 528,
+            "radius": 35
+          },
+          {
+            "label": "B",
+            "x": 1139,
+            "y": 528,
+            "radius": 35
+          },
+          {
+            "label": "C",
+            "x": 1235,
+            "y": 528,
+            "radius": 35
+          },
+          {
+            "label": "D",
+            "x": 1331,
+            "y": 528,
+            "radius": 35
+          }
+        ]
+      },
+      {
+        "question_number": 7,
+        "bounding_box": {
+          "x_min": 1043,
+          "x_max": 1331,
+          "y_min": 674,
+          "y_max": 674,
+          "avg_radius": 35
+        },
+        "bubbles": [
+          {
+            "label": "A",
+            "x": 1043,
+            "y": 674,
+            "radius": 35
+          },
+          {
+            "label": "B",
+            "x": 1139,
+            "y": 674,
+            "radius": 35
+          },
+          {
+            "label": "C",
+            "x": 1235,
+            "y": 674,
+            "radius": 35
+          },
+          {
+            "label": "D",
+            "x": 1331,
+            "y": 674,
+            "radius": 35
+          }
+        ]
+      },
+      {
+        "question_number": 8,
+        "bounding_box": {
+          "x_min": 1043,
+          "x_max": 1331,
+          "y_min": 820,
+          "y_max": 820,
+          "avg_radius": 35
+        },
+        "bubbles": [
+          {
+            "label": "A",
+            "x": 1043,
+            "y": 820,
+            "radius": 35
+          },
+          {
+            "label": "B",
+            "x": 1139,
+            "y": 820,
+            "radius": 35
+          },
+          {
+            "label": "C",
+            "x": 1235,
+            "y": 820,
+            "radius": 35
+          },
+          {
+            "label": "D",
+            "x": 1331,
+            "y": 820,
+            "radius": 35
+          }
+        ]
+      },
+      {
+        "question_number": 9,
+        "bounding_box": {
+          "x_min": 1755,
+          "x_max": 2042,
+          "y_min": 382,
+          "y_max": 382,
+          "avg_radius": 35
+        },
+        "bubbles": [
+          {
+            "label": "A",
+            "x": 1755,
+            "y": 382,
+            "radius": 35
+          },
+          {
+            "label": "B",
+            "x": 1850,
+            "y": 382,
+            "radius": 35
+          },
+          {
+            "label": "C",
+            "x": 1946,
+            "y": 382,
+            "radius": 35
+          },
+          {
+            "label": "D",
+            "x": 2042,
+            "y": 382,
+            "radius": 35
+          }
+        ]
+      },
+      {
+        "question_number": 10,
+        "bounding_box": {
+          "x_min": 1755,
+          "x_max": 2042,
+          "y_min": 528,
+          "y_max": 528,
+          "avg_radius": 35
+        },
+        "bubbles": [
+          {
+            "label": "A",
+            "x": 1755,
+            "y": 528,
+            "radius": 35
+          },
+          {
+            "label": "B",
+            "x": 1850,
+            "y": 528,
+            "radius": 35
+          },
+          {
+            "label": "C",
+            "x": 1946,
+            "y": 528,
+            "radius": 35
+          },
+          {
+            "label": "D",
+            "x": 2042,
+            "y": 528,
+            "radius": 35
+          }
+        ]
+      }
+    ]
+  },
+  "metadata": {
+    "source_file": "C:/Users/Admin/Desktop/20225705_GR2/answer_sheet.pdf",
+    "created_at": "2025-11-04T22:34:26.143273",
+    "total_pages": 1,
+    "total_questions": 10
+  }
+}
