@@ -377,104 +377,190 @@ def detect_question_bubbles(image, id_region=None, show_visualization=False):
 
 def detect_id_bubbles(image, id_region, show_visualization=False):
     """
-    Detect Student ID bubbles within the marked region
-    
-    Args:
-        image: Input image
-        id_region: (x_min, y_min, x_max, y_max) bounding box
-        show_visualization: If True, display detection
-        
-    Returns:
-        Dictionary with ID bubble data organized by digit position
+    Detect Student ID bubbles within the marked region (improved column detection).
+
+    Strategy:
+    - Detect contours in the ID region (reuse detect_bubbles_in_region).
+    - Filter by median radius to remove outliers.
+    - Cluster columns by looking for large gaps in sorted x-coordinates (adaptive).
+    - Accept columns that are close to 10 bubbles (allow tolerance).
+    - If needed, fall back to a simpler x-threshold grouping.
+    - When columns have >10 bubbles, pick 10 positions evenly (nearest to ideal positions).
     """
     x_min, y_min, x_max, y_max = id_region
-    
+
     print(f"\n[INFO] Detecting ID bubbles in region: ({x_min}, {y_min}) to ({x_max}, {y_max})")
-    
+
     # Create mask for ID region only
     height, width = image.shape[:2]
     region_mask = np.zeros((height, width), dtype=np.uint8)
     region_mask[y_min:y_max, x_min:x_max] = 255
-    
+
     # Detect bubbles in ID region
     bubble_contours = detect_bubbles_in_region(image, region_mask, False)
-    
     print(f"Detected {len(bubble_contours)} ID bubble candidates.")
-    
+
     if not bubble_contours:
         print("[WARNING] No ID bubbles detected in the marked region!")
         return None
-    
-    # Sort bubbles by position (left to right, top to bottom)
-    bubble_contours = sorted(bubble_contours, key=lambda b: (b[0], b[1]))
-    
-    # Group into columns (digit positions)
-    columns = []
-    x_threshold = 30
-    
-    for bubble in bubble_contours:
-        x, y, r, cnt = bubble
-        placed = False
-        
-        for col in columns:
-            col_x_avg = np.mean([b[0] for b in col])
-            if abs(x - col_x_avg) < x_threshold:
-                col.append(bubble)
-                placed = True
-                break
-        
-        if not placed:
-            columns.append([bubble])
-    
-    # Sort columns left to right
-    columns.sort(key=lambda col: np.mean([b[0] for b in col]))
-    
-    # Sort bubbles within each column top to bottom
-    for col in columns:
-        col.sort(key=lambda b: b[1])
-    
-    print(f"[INFO] Organized into {len(columns)} digit columns")
-    
-    # Structure ID data
+
+    # Filter by radius relative to median to remove gross outliers
+    radii = np.array([b[2] for b in bubble_contours])
+    med_r = np.median(radii)
+    if med_r <= 0:
+        med_r = np.mean(radii) if len(radii) else 0
+
+    filtered = [b for b in bubble_contours if abs(b[2] - med_r) < 0.45 * med_r]
+    if not filtered:
+        # if too aggressive, fall back to original list
+        filtered = bubble_contours.copy()
+
+    # Sort by x (primary) then y
+    filtered.sort(key=lambda b: (b[0], b[1]))
+    xs = np.array([b[0] for b in filtered])
+
+    # If we don't have enough points for gap analysis, fallback to threshold grouping
+    if len(xs) < 3:
+        print("[INFO] Not enough bubbles for adaptive clustering, using simple grouping.")
+        x_threshold = 30
+        columns = []
+        for b in filtered:
+            x, y, r, cnt = b
+            placed = False
+            for col in columns:
+                col_x_avg = np.mean([c[0] for c in col])
+                if abs(x - col_x_avg) < x_threshold:
+                    col.append(b)
+                    placed = True
+                    break
+            if not placed:
+                columns.append([b])
+    else:
+        # Adaptive 1D clustering using large gaps in sorted x
+        gaps = np.diff(xs)
+        median_gap = np.median(gaps)
+        std_gap = np.std(gaps)
+        split_thresh = max(1.8 * median_gap, median_gap + 1.5 * std_gap, 30)  # at least 30 px
+        split_indices = np.where(gaps > split_thresh)[0]
+
+        columns = []
+        start = 0
+        for idx in split_indices:
+            columns.append(filtered[start:idx + 1])
+            start = idx + 1
+        columns.append(filtered[start:])
+
+    # Sort columns left-to-right and entries top-to-bottom
+    columns = [sorted(col, key=lambda b: b[1]) for col in columns]
+    columns.sort(key=lambda col: np.mean([b[0] for b in col]) if col else 0)
+
+    print(f"[INFO] Found {len(columns)} raw columns after clustering")
+
+    # Keep only columns that are near 10 bubbles (allow tolerance)
+    valid_columns = [col for col in columns if 8 <= len(col) <= 12]
+
+    # If none found, relax criteria: pick columns closest to 10 bubbles
+    if not valid_columns:
+        # rank cols by closeness to 10
+        columns_sorted = sorted(columns, key=lambda c: abs(len(c) - 10))
+        # keep up to a reasonable number (e.g., top 6)
+        valid_columns = columns_sorted[:min(6, len(columns_sorted))]
+        print(f"[INFO] No strict-valid columns; selected {len(valid_columns)} best candidates by count")
+
+    # For each selected column ensure exactly 10 bubbles:
+    final_columns = []
+    for col in valid_columns:
+        col = sorted(col, key=lambda b: b[1])  # top-to-bottom
+        if len(col) == 10:
+            final_columns.append(col)
+            continue
+        if len(col) > 10:
+            # pick 10 by matching to 10 evenly spaced targets across the column's y-range
+            ys = np.array([b[1] for b in col])
+            targets = np.linspace(ys.min(), ys.max(), 10)
+            chosen = []
+            used = set()
+            for t in targets:
+                idx = int(np.argmin(np.abs(ys - t)))
+                # avoid picking same bubble twice
+                if idx in used:
+                    # choose nearest unused neighbor
+                    offsets = np.arange(len(ys))
+                    best = None
+                    best_dist = 1e9
+                    for off in offsets:
+                        if off in used:
+                            continue
+                        d = abs(ys[off] - t)
+                        if d < best_dist:
+                            best_dist = d
+                            best = off
+                    idx = best if best is not None else idx
+                used.add(idx)
+                chosen.append(col[idx])
+            # de-duplicate and keep order top-to-bottom
+            chosen_unique = []
+            seen = set()
+            for b in chosen:
+                key = (b[0], b[1])
+                if key not in seen:
+                    seen.add(key)
+                    chosen_unique.append(b)
+            # If still not 10 due to duplicates, take first 10
+            chosen_unique = sorted(chosen_unique, key=lambda b: b[1])[:10]
+            if len(chosen_unique) == 10:
+                final_columns.append(chosen_unique)
+            else:
+                # fallback: take 10 largest by y spacing
+                final_columns.append(sorted(col, key=lambda b: b[1])[:10])
+        else:
+            # len < 10: skip if too few, otherwise keep as-is (best effort)
+            if len(col) >= 7:
+                final_columns.append(col)
+            else:
+                print(f"[DEBUG] Rejecting small column with {len(col)} bubbles")
+
+    if not final_columns:
+        print("[WARNING] No final ID columns found after refinement")
+        return None
+
+    # Build id_data structure
     id_data = {
         'digit_columns': [],
-        'total_digits': len(columns)
+        'total_digits': len(final_columns)
     }
-    
-    for col_idx, col in enumerate(columns):
+
+    for col_idx, col in enumerate(final_columns):
+        # sort top-to-bottom
+        col = sorted(col, key=lambda b: b[1])
         digit_data = {
             'digit_position': col_idx + 1,
             'bubbles': []
         }
-        
-        print(f"  Column {col_idx + 1}: {len(col)} bubbles")
-        
         for row_idx, (x, y, r, cnt) in enumerate(col):
             digit_data['bubbles'].append({
-                'digit': row_idx,  # 0-9
+                'digit': row_idx,  # 0-9 (order by position)
                 'x': int(x),
                 'y': int(y),
                 'radius': int(r)
             })
-        
         id_data['digit_columns'].append(digit_data)
-    
-    # Visualization
+
+    print(f"[SUCCESS] {len(final_columns)} valid digit columns after clustering/refinement")
+
+    # Visualization (only valid bubbles)
     if show_visualization:
         output = image.copy()
-        
-        # Draw ID region boundary
         cv2.rectangle(output, (x_min, y_min), (x_max, y_max), (0, 255, 255), 3)
         cv2.putText(output, "ID REGION", (x_min, y_min - 10),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-        
-        # Draw bubbles
-        for col_idx, col in enumerate(columns):
+
+        for col_idx, col in enumerate(final_columns):
             for row_idx, (x, y, r, cnt) in enumerate(col):
                 cv2.circle(output, (x, y), r, (255, 0, 255), 2)
                 cv2.putText(output, str(row_idx), (x - 5, y + 5),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 255), 1)
-        
+
         height, width = output.shape[:2]
         max_height = 900
         if height > max_height:
@@ -482,11 +568,11 @@ def detect_id_bubbles(image, id_region, show_visualization=False):
             new_width = int(width * scale)
             new_height = int(height * scale)
             output = cv2.resize(output, (new_width, new_height))
-        
-        cv2.imshow('Detected ID Bubbles', output)
+
+        cv2.imshow('Detected ID Bubbles (refined)', output)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
-    
+
     return id_data
 
 
@@ -671,7 +757,10 @@ def process_pdf_answer_sheet(pdf_path, dpi=300, keep_png=False, show_visualizati
         
         print(f"\nPage {i} Summary:")
         print(f"  Questions: {len(questions)}")
-        print(f"  Student ID: {'Detected' if id_data else 'Not found'}")
+        if id_data:
+            print(f"  Student ID: Detected ({id_data['total_digits']} digits)")
+        else:
+            print(f"  Student ID: Not found")
     
     # Save to JSON
     json_path = save_template_to_json(template_data, pdf_path)
