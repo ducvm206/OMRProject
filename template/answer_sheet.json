@@ -49,33 +49,33 @@
         "bounding_box": {
           "x_min": 332,
           "x_max": 620,
-          "y_min": 528,
-          "y_max": 528,
+          "y_min": 549,
+          "y_max": 549,
           "avg_radius": 35
         },
         "bubbles": [
           {
             "label": "A",
             "x": 332,
-            "y": 528,
+            "y": 549,
             "radius": 35
           },
           {
             "label": "B",
             "x": 428,
-            "y": 528,
+            "y": 549,
             "radius": 35
           },
           {
             "label": "C",
             "x": 524,
-            "y": 528,
+            "y": 549,
             "radius": 35
           },
           {
             "label": "D",
             "x": 620,
-            "y": 528,
+            "y": 549,
             "radius": 35
           }
         ]
@@ -85,33 +85,33 @@
         "bounding_box": {
           "x_min": 332,
           "x_max": 620,
-          "y_min": 674,
-          "y_max": 674,
+          "y_min": 716,
+          "y_max": 716,
           "avg_radius": 35
         },
         "bubbles": [
           {
             "label": "A",
             "x": 332,
-            "y": 674,
+            "y": 716,
             "radius": 35
           },
           {
             "label": "B",
             "x": 428,
-            "y": 674,
+            "y": 716,
             "radius": 35
           },
           {
             "label": "C",
             "x": 524,
-            "y": 674,
+            "y": 716,
             "radius": 35
           },
           {
             "label": "D",
             "x": 620,
-            "y": 674,
+            "y": 716,
             "radius": 35
           }
         ]
@@ -121,33 +121,33 @@
         "bounding_box": {
           "x_min": 332,
           "x_max": 620,
-          "y_min": 820,
-          "y_max": 820,
+          "y_min": 882,
+          "y_max": 882,
           "avg_radius": 35
         },
         "bubbles": [
           {
             "label": "A",
             "x": 332,
-            "y": 820,
+            "y": 882,
             "radius": 35
           },
           {
             "label": "B",
             "x": 428,
-            "y": 820,
+            "y": 882,
             "radius": 35
           },
           {
             "label": "C",
             "x": 524,
-            "y": 820,
+            "y": 882,
             "radius": 35
           },
           {
             "label": "D",
             "x": 620,
-            "y": 820,
+            "y": 882,
             "radius": 35
           }
         ]
@@ -155,35 +155,35 @@
       {
         "question_number": 5,
         "bounding_box": {
-          "x_min": 1043,
-          "x_max": 1331,
-          "y_min": 382,
-          "y_max": 382,
+          "x_min": 332,
+          "x_max": 620,
+          "y_min": 1049,
+          "y_max": 1049,
           "avg_radius": 35
         },
         "bubbles": [
           {
             "label": "A",
-            "x": 1043,
-            "y": 382,
+            "x": 332,
+            "y": 1049,
             "radius": 35
           },
           {
             "label": "B",
-            "x": 1139,
-            "y": 382,
+            "x": 428,
+            "y": 1049,
             "radius": 35
           },
           {
             "label": "C",
-            "x": 1235,
-            "y": 382,
+            "x": 524,
+            "y": 1049,
             "radius": 35
           },
           {
             "label": "D",
-            "x": 1331,
-            "y": 382,
+            "x": 620,
+            "y": 1049,
             "radius": 35
           }
         ]
@@ -191,35 +191,35 @@
       {
         "question_number": 6,
         "bounding_box": {
-          "x_min": 1043,
-          "x_max": 1331,
-          "y_min": 528,
-          "y_max": 528,
+          "x_min": 332,
+          "x_max": 620,
+          "y_min": 1216,
+          "y_max": 1216,
           "avg_radius": 35
         },
         "bubbles": [
           {
             "label": "A",
-            "x": 1043,
-            "y": 528,
+            "x": 332,
+            "y": 1216,
             "radius": 35
           },
           {
             "label": "B",
-            "x": 1139,
-            "y": 528,
+            "x": 428,
+            "y": 1216,
             "radius": 35
           },
           {
             "label": "C",
-            "x": 1235,
-            "y": 528,
+            "x": 524,
+            "y": 1216,
             "radius": 35
           },
           {
             "label": "D",
-            "x": 1331,
-            "y": 528,
+            "x": 620,
+            "y": 1216,
             "radius": 35
           }
         ]
@@ -227,35 +227,35 @@
       {
         "question_number": 7,
         "bounding_box": {
-          "x_min": 1043,
-          "x_max": 1331,
-          "y_min": 674,
-          "y_max": 674,
+          "x_min": 332,
+          "x_max": 620,
+          "y_min": 1382,
+          "y_max": 1382,
           "avg_radius": 35
         },
         "bubbles": [
           {
             "label": "A",
-            "x": 1043,
-            "y": 674,
+            "x": 332,
+            "y": 1382,
             "radius": 35
           },
           {
             "label": "B",
-            "x": 1139,
-            "y": 674,
+            "x": 428,
+            "y": 1382,
             "radius": 35
           },
           {
             "label": "C",
-            "x": 1235,
-            "y": 674,
+            "x": 524,
+            "y": 1382,
             "radius": 35
           },
           {
             "label": "D",
-            "x": 1331,
-            "y": 674,
+            "x": 620,
+            "y": 1382,
             "radius": 35
           }
         ]
@@ -263,35 +263,35 @@
       {
         "question_number": 8,
         "bounding_box": {
-          "x_min": 1043,
-          "x_max": 1331,
-          "y_min": 820,
-          "y_max": 820,
+          "x_min": 332,
+          "x_max": 620,
+          "y_min": 1549,
+          "y_max": 1549,
           "avg_radius": 35
         },
         "bubbles": [
           {
             "label": "A",
-            "x": 1043,
-            "y": 820,
+            "x": 332,
+            "y": 1549,
             "radius": 35
           },
           {
             "label": "B",
-            "x": 1139,
-            "y": 820,
+            "x": 428,
+            "y": 1549,
             "radius": 35
           },
           {
             "label": "C",
-            "x": 1235,
-            "y": 820,
+            "x": 524,
+            "y": 1549,
             "radius": 35
           },
           {
             "label": "D",
-            "x": 1331,
-            "y": 820,
+            "x": 620,
+            "y": 1549,
             "radius": 35
           }
         ]
@@ -299,35 +299,35 @@
       {
         "question_number": 9,
         "bounding_box": {
-          "x_min": 1755,
-          "x_max": 2042,
-          "y_min": 382,
-          "y_max": 382,
+          "x_min": 332,
+          "x_max": 620,
+          "y_min": 1716,
+          "y_max": 1716,
           "avg_radius": 35
         },
         "bubbles": [
           {
             "label": "A",
-            "x": 1755,
-            "y": 382,
+            "x": 332,
+            "y": 1716,
             "radius": 35
           },
           {
             "label": "B",
-            "x": 1850,
-            "y": 382,
+            "x": 428,
+            "y": 1716,
             "radius": 35
           },
           {
             "label": "C",
-            "x": 1946,
-            "y": 382,
+            "x": 524,
+            "y": 1716,
             "radius": 35
           },
           {
             "label": "D",
-            "x": 2042,
-            "y": 382,
+            "x": 620,
+            "y": 1716,
             "radius": 35
           }
         ]
@@ -335,44 +335,569 @@
       {
         "question_number": 10,
         "bounding_box": {
-          "x_min": 1755,
-          "x_max": 2042,
-          "y_min": 528,
-          "y_max": 528,
+          "x_min": 332,
+          "x_max": 620,
+          "y_min": 1882,
+          "y_max": 1882,
           "avg_radius": 35
         },
         "bubbles": [
           {
             "label": "A",
-            "x": 1755,
-            "y": 528,
+            "x": 332,
+            "y": 1882,
             "radius": 35
           },
           {
             "label": "B",
-            "x": 1850,
-            "y": 528,
+            "x": 428,
+            "y": 1882,
             "radius": 35
           },
           {
             "label": "C",
-            "x": 1946,
-            "y": 528,
+            "x": 524,
+            "y": 1882,
             "radius": 35
           },
           {
             "label": "D",
-            "x": 2042,
-            "y": 528,
+            "x": 620,
+            "y": 1882,
             "radius": 35
           }
         ]
       }
-    ]
+    ],
+    "student_id": {
+      "digit_columns": [
+        {
+          "digit_position": 1,
+          "bubbles": [
+            {
+              "digit": 0,
+              "x": 1487,
+              "y": 2112,
+              "radius": 31
+            },
+            {
+              "digit": 1,
+              "x": 1487,
+              "y": 2203,
+              "radius": 31
+            },
+            {
+              "digit": 2,
+              "x": 1487,
+              "y": 2295,
+              "radius": 31
+            },
+            {
+              "digit": 3,
+              "x": 1487,
+              "y": 2387,
+              "radius": 31
+            },
+            {
+              "digit": 4,
+              "x": 1487,
+              "y": 2478,
+              "radius": 31
+            },
+            {
+              "digit": 5,
+              "x": 1487,
+              "y": 2570,
+              "radius": 31
+            },
+            {
+              "digit": 6,
+              "x": 1487,
+              "y": 2662,
+              "radius": 31
+            },
+            {
+              "digit": 7,
+              "x": 1487,
+              "y": 2753,
+              "radius": 31
+            },
+            {
+              "digit": 8,
+              "x": 1487,
+              "y": 2845,
+              "radius": 31
+            },
+            {
+              "digit": 9,
+              "x": 1487,
+              "y": 2937,
+              "radius": 31
+            }
+          ]
+        },
+        {
+          "digit_position": 2,
+          "bubbles": [
+            {
+              "digit": 0,
+              "x": 1570,
+              "y": 2112,
+              "radius": 31
+            },
+            {
+              "digit": 1,
+              "x": 1570,
+              "y": 2203,
+              "radius": 31
+            },
+            {
+              "digit": 2,
+              "x": 1570,
+              "y": 2295,
+              "radius": 31
+            },
+            {
+              "digit": 3,
+              "x": 1570,
+              "y": 2387,
+              "radius": 31
+            },
+            {
+              "digit": 4,
+              "x": 1570,
+              "y": 2478,
+              "radius": 31
+            },
+            {
+              "digit": 5,
+              "x": 1570,
+              "y": 2570,
+              "radius": 31
+            },
+            {
+              "digit": 6,
+              "x": 1570,
+              "y": 2662,
+              "radius": 31
+            },
+            {
+              "digit": 7,
+              "x": 1570,
+              "y": 2753,
+              "radius": 31
+            },
+            {
+              "digit": 8,
+              "x": 1570,
+              "y": 2845,
+              "radius": 31
+            },
+            {
+              "digit": 9,
+              "x": 1570,
+              "y": 2937,
+              "radius": 31
+            }
+          ]
+        },
+        {
+          "digit_position": 3,
+          "bubbles": [
+            {
+              "digit": 0,
+              "x": 1653,
+              "y": 2112,
+              "radius": 31
+            },
+            {
+              "digit": 1,
+              "x": 1653,
+              "y": 2203,
+              "radius": 31
+            },
+            {
+              "digit": 2,
+              "x": 1653,
+              "y": 2295,
+              "radius": 31
+            },
+            {
+              "digit": 3,
+              "x": 1653,
+              "y": 2387,
+              "radius": 31
+            },
+            {
+              "digit": 4,
+              "x": 1653,
+              "y": 2478,
+              "radius": 31
+            },
+            {
+              "digit": 5,
+              "x": 1653,
+              "y": 2570,
+              "radius": 31
+            },
+            {
+              "digit": 6,
+              "x": 1653,
+              "y": 2662,
+              "radius": 31
+            },
+            {
+              "digit": 7,
+              "x": 1653,
+              "y": 2753,
+              "radius": 31
+            },
+            {
+              "digit": 8,
+              "x": 1653,
+              "y": 2845,
+              "radius": 31
+            },
+            {
+              "digit": 9,
+              "x": 1653,
+              "y": 2937,
+              "radius": 31
+            }
+          ]
+        },
+        {
+          "digit_position": 4,
+          "bubbles": [
+            {
+              "digit": 0,
+              "x": 1737,
+              "y": 2112,
+              "radius": 31
+            },
+            {
+              "digit": 1,
+              "x": 1737,
+              "y": 2203,
+              "radius": 31
+            },
+            {
+              "digit": 2,
+              "x": 1737,
+              "y": 2295,
+              "radius": 31
+            },
+            {
+              "digit": 3,
+              "x": 1737,
+              "y": 2387,
+              "radius": 31
+            },
+            {
+              "digit": 4,
+              "x": 1737,
+              "y": 2478,
+              "radius": 31
+            },
+            {
+              "digit": 5,
+              "x": 1737,
+              "y": 2570,
+              "radius": 31
+            },
+            {
+              "digit": 6,
+              "x": 1737,
+              "y": 2662,
+              "radius": 31
+            },
+            {
+              "digit": 7,
+              "x": 1737,
+              "y": 2753,
+              "radius": 31
+            },
+            {
+              "digit": 8,
+              "x": 1737,
+              "y": 2845,
+              "radius": 31
+            },
+            {
+              "digit": 9,
+              "x": 1737,
+              "y": 2937,
+              "radius": 31
+            }
+          ]
+        },
+        {
+          "digit_position": 5,
+          "bubbles": [
+            {
+              "digit": 0,
+              "x": 1820,
+              "y": 2112,
+              "radius": 31
+            },
+            {
+              "digit": 1,
+              "x": 1820,
+              "y": 2203,
+              "radius": 31
+            },
+            {
+              "digit": 2,
+              "x": 1820,
+              "y": 2295,
+              "radius": 31
+            },
+            {
+              "digit": 3,
+              "x": 1820,
+              "y": 2387,
+              "radius": 31
+            },
+            {
+              "digit": 4,
+              "x": 1820,
+              "y": 2478,
+              "radius": 31
+            },
+            {
+              "digit": 5,
+              "x": 1820,
+              "y": 2570,
+              "radius": 31
+            },
+            {
+              "digit": 6,
+              "x": 1820,
+              "y": 2662,
+              "radius": 31
+            },
+            {
+              "digit": 7,
+              "x": 1820,
+              "y": 2753,
+              "radius": 31
+            },
+            {
+              "digit": 8,
+              "x": 1820,
+              "y": 2845,
+              "radius": 31
+            },
+            {
+              "digit": 9,
+              "x": 1820,
+              "y": 2937,
+              "radius": 31
+            }
+          ]
+        },
+        {
+          "digit_position": 6,
+          "bubbles": [
+            {
+              "digit": 0,
+              "x": 1903,
+              "y": 2112,
+              "radius": 31
+            },
+            {
+              "digit": 1,
+              "x": 1903,
+              "y": 2203,
+              "radius": 31
+            },
+            {
+              "digit": 2,
+              "x": 1903,
+              "y": 2295,
+              "radius": 31
+            },
+            {
+              "digit": 3,
+              "x": 1903,
+              "y": 2387,
+              "radius": 31
+            },
+            {
+              "digit": 4,
+              "x": 1903,
+              "y": 2478,
+              "radius": 31
+            },
+            {
+              "digit": 5,
+              "x": 1903,
+              "y": 2570,
+              "radius": 31
+            },
+            {
+              "digit": 6,
+              "x": 1903,
+              "y": 2662,
+              "radius": 31
+            },
+            {
+              "digit": 7,
+              "x": 1903,
+              "y": 2753,
+              "radius": 31
+            },
+            {
+              "digit": 8,
+              "x": 1903,
+              "y": 2845,
+              "radius": 31
+            },
+            {
+              "digit": 9,
+              "x": 1903,
+              "y": 2937,
+              "radius": 31
+            }
+          ]
+        },
+        {
+          "digit_position": 7,
+          "bubbles": [
+            {
+              "digit": 0,
+              "x": 1987,
+              "y": 2112,
+              "radius": 31
+            },
+            {
+              "digit": 1,
+              "x": 1987,
+              "y": 2203,
+              "radius": 31
+            },
+            {
+              "digit": 2,
+              "x": 1987,
+              "y": 2295,
+              "radius": 31
+            },
+            {
+              "digit": 3,
+              "x": 1987,
+              "y": 2387,
+              "radius": 31
+            },
+            {
+              "digit": 4,
+              "x": 1987,
+              "y": 2478,
+              "radius": 31
+            },
+            {
+              "digit": 5,
+              "x": 1987,
+              "y": 2570,
+              "radius": 31
+            },
+            {
+              "digit": 6,
+              "x": 1987,
+              "y": 2662,
+              "radius": 31
+            },
+            {
+              "digit": 7,
+              "x": 1987,
+              "y": 2753,
+              "radius": 31
+            },
+            {
+              "digit": 8,
+              "x": 1987,
+              "y": 2845,
+              "radius": 31
+            },
+            {
+              "digit": 9,
+              "x": 1987,
+              "y": 2937,
+              "radius": 31
+            }
+          ]
+        },
+        {
+          "digit_position": 8,
+          "bubbles": [
+            {
+              "digit": 0,
+              "x": 2070,
+              "y": 2112,
+              "radius": 31
+            },
+            {
+              "digit": 1,
+              "x": 2070,
+              "y": 2203,
+              "radius": 31
+            },
+            {
+              "digit": 2,
+              "x": 2070,
+              "y": 2295,
+              "radius": 31
+            },
+            {
+              "digit": 3,
+              "x": 2070,
+              "y": 2387,
+              "radius": 31
+            },
+            {
+              "digit": 4,
+              "x": 2070,
+              "y": 2478,
+              "radius": 31
+            },
+            {
+              "digit": 5,
+              "x": 2070,
+              "y": 2570,
+              "radius": 31
+            },
+            {
+              "digit": 6,
+              "x": 2070,
+              "y": 2662,
+              "radius": 31
+            },
+            {
+              "digit": 7,
+              "x": 2070,
+              "y": 2753,
+              "radius": 31
+            },
+            {
+              "digit": 8,
+              "x": 2070,
+              "y": 2845,
+              "radius": 31
+            },
+            {
+              "digit": 9,
+              "x": 2070,
+              "y": 2937,
+              "radius": 31
+            }
+          ]
+        }
+      ],
+      "total_digits": 8
+    }
   },
   "metadata": {
-    "source_file": "C:/Users/Admin/Desktop/20225705_GR2/answer_sheet.pdf",
-    "created_at": "2025-11-04T22:34:26.143273",
+    "source_file": "answer_sheet.pdf",
+    "created_at": "2025-11-10T13:15:41.244844",
     "total_pages": 1,
     "total_questions": 10
   }

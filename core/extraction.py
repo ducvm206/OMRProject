@@ -213,7 +213,7 @@ class AnswerSheetExtractor:
         scale_x = target_width / self.template.template_width
         scale_y = target_height / self.template.template_height
         
-        print(f"\nScale factors: X={scale_x:.3f}, Y={scale_y:.3f}")
+        #print(f"\nScale factors: X={scale_x:.3f}, Y={scale_y:.3f}")
         
         scaled_questions = []
         for question in self.template.questions:
@@ -283,9 +283,9 @@ class AnswerSheetExtractor:
     
     def extract_answers(self, image, gray, questions, threshold_percent=50):
         """Extract answers from questions"""
-        print("\n" + "="*70)
-        print("EXTRACTING ANSWERS")
-        print("="*70)
+        #print("\n" + "="*70)
+        #print("EXTRACTING ANSWERS")
+        #print("="*70)
         
         for question in questions:
             for bubble in question.bubbles:
@@ -298,19 +298,14 @@ class AnswerSheetExtractor:
         # Print summary
         for question in questions[:5]:  # Show first 5
             answer = question.get_answer()
-            answer_str = ', '.join(answer) if answer else 'No answer'
-            print(f"Question {question.question_number}: {answer_str}")
-        
-        if len(questions) > 5:
-            print(f"... and {len(questions) - 5} more questions")
-        
+
         return questions
     
     def extract_student_id(self, gray, scaled_id_template, threshold_percent=50):
         """Extract student ID"""
-        print("\n" + "="*70)
-        print("EXTRACTING STUDENT ID")
-        print("="*70)
+        #print("\n" + "="*70)
+        #print("EXTRACTING STUDENT ID")
+        #print("="*70)
         
         if not scaled_id_template:
             print("[INFO] No ID template available")
@@ -388,9 +383,9 @@ class AnswerSheetExtractor:
             'digit_details': digit_details
         }
         
-        print(f"Student ID: {id_string}")
-        print(f"Valid: {is_valid}")
-        print(f"Confidence: {avg_confidence:.1f}%")
+        #print(f"Student ID: {id_string}")
+        #print(f"Valid: {is_valid}")
+        #print(f"Confidence: {avg_confidence:.1f}%")
         
         return result
     
@@ -475,11 +470,11 @@ class AnswerSheetExtractor:
         Returns:
             Dictionary with complete extraction data
         """
-        print("\n" + "="*70)
-        print("COMPLETE ANSWER SHEET EXTRACTION")
-        print("="*70)
-        print(f"Image: {image_path}")
-        print(f"Threshold: {threshold_percent}%")
+        #print("\n" + "="*70)
+        #print("COMPLETE ANSWER SHEET EXTRACTION")
+        #print("="*70)
+        #print(f"Image: {image_path}")
+        #print(f"Threshold: {threshold_percent}%")
         
         # Load image
         image = cv2.imread(image_path)
@@ -490,11 +485,11 @@ class AnswerSheetExtractor:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         target_height, target_width = image.shape[:2]
         
-        print(f"Dimensions: {target_width}x{target_height}")
+        #print(f"Dimensions: {target_width}x{target_height}")
         
         # Scale questions
         scaled_questions = self.scale_questions(target_width, target_height)
-        print(f"[SUCCESS] Scaled {len(scaled_questions)} questions")
+        #print(f"[SUCCESS] Scaled {len(scaled_questions)} questions")
         
         # Extract answers
         questions = self.extract_answers(image, gray, scaled_questions, threshold_percent)
@@ -567,7 +562,7 @@ def save_extraction_to_json(result, output_dir='scanned_answers'):
     with open(json_path, 'w', encoding='utf-8') as f:
         json.dump(result, f, indent=2, ensure_ascii=False)
     
-    print(f"\n[SAVED] Extraction saved to: {json_path}")
+    #print(f"\n[SAVED] Extraction saved to: {json_path}")
     
     return json_path
 

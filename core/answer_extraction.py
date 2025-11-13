@@ -234,7 +234,7 @@ class AnswerExtractor:
         scale_x = target_width / self.template.template_width
         scale_y = target_height / self.template.template_height
         
-        print(f"\nScale factors: X={scale_x:.3f}, Y={scale_y:.3f}")
+        #print(f"\nScale factors: X={scale_x:.3f}, Y={scale_y:.3f}")
         
         # Scale all questions
         scaled_questions = []

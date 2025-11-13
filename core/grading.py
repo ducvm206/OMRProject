@@ -68,9 +68,9 @@ def grade_answers(answer_key_data, scanned_answers_data, max_points=None, partia
     Returns:
         Dictionary with grading results
     """
-    print("\n" + "="*70)
-    print("GRADING IN PROGRESS")
-    print("="*70)
+    #print("\n" + "="*70)
+    #print("GRADING IN PROGRESS")
+    #print("="*70)
     
     answer_key = answer_key_data['answer_key']
     scanned_answers = scanned_answers_data['answers']
@@ -85,8 +85,8 @@ def grade_answers(answer_key_data, scanned_answers_data, max_points=None, partia
         max_points = float(max_points)
         points_per_question = max_points / total_questions
     
-    print(f"Max points: {max_points}")
-    print(f"Points per question: {points_per_question:.2f}")
+    #print(f"Max points: {max_points}")
+    #print(f"Points per question: {points_per_question:.2f}")
     
     results = {
         'correct': 0,
@@ -296,7 +296,7 @@ def save_grade_report(results, answer_key_path, scanned_answers_path, output_dir
     with open(json_path, 'w', encoding='utf-8') as f:
         json.dump(report_data, f, indent=2, ensure_ascii=False)
     
-    print(f"\n[SAVED] Grade report saved to: {json_path}")
+    #print(f"\n[SAVED] Grade report saved to: {json_path}")
     
     return json_path
 
@@ -341,9 +341,9 @@ def compare_multiple_students(answer_key_path, scanned_answers_folder='scanned_a
     
     for answer_file in answer_files:
         answer_path = os.path.join(scanned_answers_folder, answer_file)
-        print(f"\n{'='*70}")
-        print(f"Grading: {answer_file}")
-        print(f"{'='*70}")
+        #print(f"\n{'='*70}")
+        #print(f"Grading: {answer_file}")
+        #print(f"{'='*70}")
         
         try:
             # Load and grade
@@ -479,11 +479,11 @@ def main():
         with open(report_path, 'r', encoding='utf-8') as f:
             report_data = json.load(f)
         
-        print("\n" + "="*70)
-        print("GRADE REPORT")
-        print("="*70)
-        print(f"Graded at: {report_data['metadata']['graded_at']}")
-        print(f"Answer key: {report_data['metadata']['answer_key_used']}")
+        #print("\n" + "="*70)
+        #print("GRADE REPORT")
+        #print("="*70)
+        #print(f"Graded at: {report_data['metadata']['graded_at']}")
+        #print(f"Answer key: {report_data['metadata']['answer_key_used']}")
         
         summary = report_data['summary']
         print(f"\nTotal questions: {summary['total_questions']}")

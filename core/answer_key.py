@@ -140,7 +140,7 @@ def create_answer_key_from_scan(template_info, master_sheet_path, threshold_perc
     print(f"Scanning master answer sheet: {master_sheet_path}")
     
     # Import here to avoid circular dependency
-    from answer_extraction import BubbleTemplate, AnswerExtractor
+    from extraction import BubbleTemplate, AnswerExtractor
     
     # Load template
     template = BubbleTemplate(template_info['template_path'])
@@ -355,7 +355,7 @@ def main():
     if choice == '1':
         # Manual entry
         answer_key, json_path = create_answer_key_manual(template_info)
-        print(f"\n[SUCCESS] Answer key created: {json_path}")
+        print(f"\nAnswer key created: {json_path}")
     
     elif choice == '2':
         # Scan master sheet

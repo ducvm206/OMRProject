@@ -567,18 +567,6 @@ if __name__ == "__main__":
     print("\n=== Testing Presets ===")
     
     # 10 questions preset
-    designer.create_answer_sheet(10, 'answer_sheet_10q.pdf', format='pdf')
-    print("✓ 10 questions sheet created")
-    
-    # 20 questions preset
-    designer.create_answer_sheet(20, 'answer_sheet_20q.pdf', format='pdf')
-    print("✓ 20 questions sheet created")
-    
-    # 30 questions preset
-    designer.create_answer_sheet(30, 'answer_sheet_30q.pdf', format='pdf')
-    print("✓ 30 questions sheet created")
-    
-    # 40 questions preset
-    designer.create_answer_sheet(40, 'answer_sheet_40q.pdf', format='pdf')
-    print("✓ 40 questions sheet created")
+    designer.create_answer_sheet(32, 'answer_sheet_15.pdf', format='pdf')
+
     

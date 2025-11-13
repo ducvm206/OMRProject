@@ -292,7 +292,7 @@ class StudentIDExtractor:
         }
         
         # Print summary
-        print("\n" + "="*70)
+        #print("\n" + "="*70)
         print("EXTRACTION SUMMARY")
         print("="*70)
         print(f"Student ID: {id_string}")

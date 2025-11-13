@@ -1,15 +1,15 @@
 {
   "metadata": {
-    "source_image": "filled_sheet.png",
-    "extracted_at": "2025-11-10T16:29:14.862206",
-    "template_used": "template/1.json",
-    "threshold_percent": 90,
+    "source_image": "filled_sheets\\filled_sheet_3.png",
+    "extracted_at": "2025-11-13T11:06:27.961550",
+    "template_used": "template\\1.json",
+    "threshold_percent": 80,
     "total_questions": 10
   },
   "student_id": {
-    "student_id": "20201234",
+    "student_id": "20200003",
     "is_valid": true,
-    "average_confidence": 99.91050119331743,
+    "average_confidence": 100.0,
     "digit_details": [
       {
         "position": 1,
@@ -37,26 +37,26 @@
       },
       {
         "position": 5,
-        "digit": 1,
-        "confidence": 99.68178202068417,
+        "digit": 0,
+        "confidence": 100.0,
         "status": "valid"
       },
       {
         "position": 6,
-        "digit": 2,
-        "confidence": 99.68178202068417,
+        "digit": 0,
+        "confidence": 100.0,
         "status": "valid"
       },
       {
         "position": 7,
-        "digit": 3,
+        "digit": 0,
         "confidence": 100.0,
         "status": "valid"
       },
       {
         "position": 8,
-        "digit": 4,
-        "confidence": 99.92044550517105,
+        "digit": 3,
+        "confidence": 100.0,
         "status": "valid"
       }
     ]
@@ -65,18 +65,18 @@
     "1": {
       "question_number": 1,
       "selected_answers": [
-        "A"
+        "B"
       ],
       "bubbles": [
         {
           "label": "A",
-          "filled": true,
-          "fill_percentage": 99.82
+          "filled": false,
+          "fill_percentage": 27.71
         },
         {
           "label": "B",
-          "filled": false,
-          "fill_percentage": 30.97
+          "filled": true,
+          "fill_percentage": 98.97
         },
         {
           "label": "C",
@@ -121,7 +121,7 @@
     "3": {
       "question_number": 3,
       "selected_answers": [
-        "B"
+        "C"
       ],
       "bubbles": [
         {
@@ -131,13 +131,13 @@
         },
         {
           "label": "B",
-          "filled": true,
-          "fill_percentage": 100.0
+          "filled": false,
+          "fill_percentage": 31.46
         },
         {
           "label": "C",
-          "filled": false,
-          "fill_percentage": 26.68
+          "filled": true,
+          "fill_percentage": 100.0
         },
         {
           "label": "D",
@@ -177,7 +177,7 @@
     "5": {
       "question_number": 5,
       "selected_answers": [
-        "B"
+        "D"
       ],
       "bubbles": [
         {
@@ -187,8 +187,8 @@
         },
         {
           "label": "B",
-          "filled": true,
-          "fill_percentage": 99.88
+          "filled": false,
+          "fill_percentage": 31.4
         },
         {
           "label": "C",
@@ -197,21 +197,21 @@
         },
         {
           "label": "D",
-          "filled": false,
-          "fill_percentage": 30.67
+          "filled": true,
+          "fill_percentage": 100.0
         }
       ]
     },
     "6": {
       "question_number": 6,
       "selected_answers": [
-        "C"
+        "A"
       ],
       "bubbles": [
         {
           "label": "A",
-          "filled": false,
-          "fill_percentage": 27.89
+          "filled": true,
+          "fill_percentage": 99.46
         },
         {
           "label": "B",
@@ -220,8 +220,8 @@
         },
         {
           "label": "C",
-          "filled": true,
-          "fill_percentage": 100.0
+          "filled": false,
+          "fill_percentage": 27.34
         },
         {
           "label": "D",
@@ -233,7 +233,7 @@
     "7": {
       "question_number": 7,
       "selected_answers": [
-        "D"
+        "B"
       ],
       "bubbles": [
         {
@@ -243,8 +243,8 @@
         },
         {
           "label": "B",
-          "filled": false,
-          "fill_percentage": 30.97
+          "filled": true,
+          "fill_percentage": 99.4
         },
         {
           "label": "C",
@@ -253,15 +253,15 @@
         },
         {
           "label": "D",
-          "filled": true,
-          "fill_percentage": 99.76
+          "filled": false,
+          "fill_percentage": 30.61
         }
       ]
     },
     "8": {
       "question_number": 8,
       "selected_answers": [
-        "D"
+        "C"
       ],
       "bubbles": [
         {
@@ -276,26 +276,26 @@
         },
         {
           "label": "C",
-          "filled": false,
-          "fill_percentage": 27.1
+          "filled": true,
+          "fill_percentage": 99.46
         },
         {
           "label": "D",
-          "filled": true,
-          "fill_percentage": 99.46
+          "filled": false,
+          "fill_percentage": 30.73
         }
       ]
     },
     "9": {
       "question_number": 9,
       "selected_answers": [
-        "A"
+        "D"
       ],
       "bubbles": [
         {
           "label": "A",
-          "filled": true,
-          "fill_percentage": 99.94
+          "filled": false,
+          "fill_percentage": 28.86
         },
         {
           "label": "B",
@@ -309,15 +309,15 @@
         },
         {
           "label": "D",
-          "filled": false,
-          "fill_percentage": 31.09
+          "filled": true,
+          "fill_percentage": 100.0
         }
       ]
     },
     "10": {
       "question_number": 10,
       "selected_answers": [
-        "B"
+        "C"
       ],
       "bubbles": [
         {
@@ -327,13 +327,13 @@
         },
         {
           "label": "B",
-          "filled": true,
-          "fill_percentage": 99.09
+          "filled": false,
+          "fill_percentage": 30.97
         },
         {
           "label": "C",
-          "filled": false,
-          "fill_percentage": 27.04
+          "filled": true,
+          "fill_percentage": 99.03
         },
         {
           "label": "D",
