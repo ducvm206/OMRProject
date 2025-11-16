@@ -1,686 +1,696 @@
-"""
-test.py - Complete Answer Sheet Processing Pipeline
-
-This script runs the entire workflow:
-1. Create blank PDF template
-2. Extract bubble positions and save to JSON
-3. Create answer key (manual or scan master sheet)
-4. Extract answers and grade (combined)
-"""
-
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox, scrolledtext
 import os
-import sys
 from datetime import datetime
-import glob
-import csv
-import json
+from pymongo import MongoClient
+import threading
+from pathlib import Path
 
+# Import core modules
+from core import sheet_maker, bubble_extraction, answer_key, extraction, grading
 
-def print_step(step_num, step_name):
-    """Print formatted step header"""
-    print("\n" + "="*70)
-    print(f"STEP {step_num}: {step_name}")
-    print("="*70)
-
-
-def step1_create_blank_sheet():
-    """Step 1: Create blank PDF answer sheet"""
-    print_step(1, "CREATE BLANK PDF ANSWER SHEET")
-    
-    try:
-        from core.sheet_maker import AnswerSheetDesigner
+class GradingSystemUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Automatic Answer Sheet Grading System")
+        self.root.geometry("1200x800")
+        self.root.minsize(1000, 700)
         
-        # Get user input
-        print("\nAnswer Sheet Configuration:")
-        num_questions = input("Number of questions (10/20/30/40): ").strip()
-        if not num_questions:
-            num_questions = "40"
+        # MongoDB connection
+        self.db = None
+        self.connect_db()
         
-        try:
-            num_questions = int(num_questions)
-        except ValueError:
-            print("[ERROR] Invalid number. Using 40 questions.")
-            num_questions = 40
+        # Project paths
+        self.PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
         
-        # Get output path
-        output_path = input(f"Save as (default: answer_sheet.pdf): ").strip()
-        if not output_path:
-            output_path = f'answer_sheet.pdf'
-        
-        if not output_path.endswith('.pdf'):
-            output_path += '.pdf'
-        
-        print(f"\nCreating {num_questions}-question answer sheet...")
-        
-        # Create designer and generate PDF
-        designer = AnswerSheetDesigner()
-        designer.set_config(include_student_id=True)
-        
-        # Use preset for optimal layout
-        designer.create_answer_sheet(
-            total_questions=num_questions,
-            output_path=output_path,
-            format='pdf',
-            use_preset=True
-        )
-        
-        print(f"\n[SUCCESS] Blank sheet created: {output_path}")
-        return output_path
-        
-    except ImportError as e:
-        print(f"[ERROR] Failed to import sheet_maker: {e}")
-        return None
-    except Exception as e:
-        print(f"[ERROR] Failed to create blank sheet: {e}")
-        return None
-
-
-def step2_extract_bubble_positions(pdf_path):
-    """Step 2: Extract bubble positions from PDF and save to JSON"""
-    print_step(2, "EXTRACT BUBBLE POSITIONS")
-    
-    if not pdf_path or not os.path.exists(pdf_path):
-        print(f"[ERROR] PDF file not found: {pdf_path}")
-        
-        # Ask user to provide PDF
-        pdf_path = input("\nEnter path to blank PDF template: ").strip()
-        if not pdf_path or not os.path.exists(pdf_path):
-            print("[ERROR] Invalid PDF path")
-            return None
-    
-    try:
-        from core.bubble_extraction import process_pdf_answer_sheet
-        
-        print(f"\nProcessing PDF: {pdf_path}")
-        
-        # Get options
-        dpi_input = input("DPI quality (150/300, default 300): ").strip()
-        dpi = int(dpi_input) if dpi_input else 300
-        
-        show_viz = input("Show visualization? (y/n, default y): ").strip().lower()
-        show_visualization = show_viz != 'n'
-        
-        print("\nExtracting bubble positions...")
-        print("This will detect questions AND student ID bubbles...\n")
-        
-        # Extract bubbles and save to JSON
-        json_path = process_pdf_answer_sheet(
-            pdf_path=pdf_path,
-            dpi=dpi,
-            keep_png=False,
-            show_visualization=show_visualization
-        )
-        
-        if json_path:
-            print(f"\n[SUCCESS] Template saved to: {json_path}")
-            return json_path
-        else:
-            print("[ERROR] Failed to extract bubbles")
-            return None
-            
-    except ImportError as e:
-        print(f"[ERROR] Failed to import bubble_detector: {e}")
-        return None
-    except Exception as e:
-        print(f"[ERROR] Failed to extract bubbles: {e}")
-        return None
-
-
-def step3_create_answer_key(template_json):
-    """Step 3: Create answer key (manual or scan master sheet)"""
-    print_step(3, "CREATE ANSWER KEY")
-    
-    if not template_json or not os.path.exists(template_json):
-        print(f"[ERROR] Template JSON not found: {template_json}")
-        
-        # Ask user to provide template
-        template_json = input("\nEnter path to template JSON: ").strip()
-        if not template_json or not os.path.exists(template_json):
-            print("[ERROR] Invalid template path")
-            return None
-    
-    try:
-        from core.answer_key import load_template_info, create_answer_key_manual, create_answer_key_from_scan
-        
-        print(f"\nUsing template: {template_json}")
-        
-        # Load template info
-        template_info = load_template_info(template_json)
-        
-        print("\nChoose answer key creation method:")
-        print("1. Manual entry (type answers for each question)")
-        print("2. Scan master answer sheet (automatic detection)")
-        
-        choice = input("\nEnter choice (1-2, default 1): ").strip()
-        if not choice:
-            choice = '1'
-        
-        if choice == '1':
-            # Manual entry
-            print("\n[MANUAL ENTRY MODE]")
-            print("You will be prompted to enter the correct answer for each question.")
-            print("Press Enter when ready...")
-            input()
-            
-            answer_key, key_json = create_answer_key_manual(template_info)
-            print(f"\n[SUCCESS] Answer key created: {key_json}")
-            return key_json
-            
-        elif choice == '2':
-            # Scan master sheet
-            master_sheet = input("\nEnter path to master answer sheet image: ").strip()
-            if not master_sheet:
-                master_sheet = 'master_answer_sheet.png'
-            
-            if not os.path.exists(master_sheet):
-                print(f"[ERROR] Master sheet not found: {master_sheet}")
-                return None
-            
-            threshold = input("Detection threshold (20-80, default 50): ").strip()
-            threshold = int(threshold) if threshold else 50
-            
-            print("\nScanning master answer sheet...")
-            
-            answer_key, key_json = create_answer_key_from_scan(
-                template_info,
-                master_sheet,
-                threshold_percent=threshold
-            )
-            
-            if key_json:
-                print(f"\n[SUCCESS] Answer key created: {key_json}")
-                return key_json
-            else:
-                print("[ERROR] Failed to create answer key from scan")
-                return None
-        else:
-            print("[ERROR] Invalid choice")
-            return None
-            
-    except ImportError as e:
-        print(f"[ERROR] Failed to import answer_key: {e}")
-        return None
-    except Exception as e:
-        print(f"[ERROR] Failed to create answer key: {e}")
-        return None
-
-
-def step4_extract_and_grade(template_json, key_json, show_details = False):
-    """Step 4: Extract answers from filled sheet and grade"""
-    print_step(4, "EXTRACT ANSWERS & GRADE")
-    
-    if not template_json or not os.path.exists(template_json):
-        print(f"[ERROR] Template JSON not found: {template_json}")
-        return None
-    
-    if not key_json or not os.path.exists(key_json):
-        print(f"[ERROR] Answer key not found: {key_json}")
-        return None
-    
-    try:
-        from core.extraction import BubbleTemplate, AnswerSheetExtractor, save_extraction_to_json
-        from core.grading import load_answer_key, grade_answers, print_grading_summary, save_grade_report
-        
-        # Get filled answer sheet
-        answer_sheet = input("\nEnter path to filled answer sheet image: ").strip()
-        if not answer_sheet:
-            answer_sheet = 'filled_answer_sheet.png'
-        
-        if not os.path.exists(answer_sheet):
-            print(f"[ERROR] Answer sheet not found: {answer_sheet}")
-            return None
-        
-        # Get extraction options
-        threshold = input("Detection threshold (20-80, default 50): ").strip()
-        threshold = int(threshold) if threshold else 50
-        
-        show_viz = input("Show visualization? (y/n, default y): ").strip().lower()
-        show_visualization = show_viz != 'n'
-        
-        print("\n" + "="*70)
-        print("PART A: EXTRACTING ANSWERS & STUDENT ID")
-        print("="*70)
-        
-        # Load template and extract
-        template = BubbleTemplate(template_json)
-        extractor = AnswerSheetExtractor(template)
-        
-        result = extractor.extract_complete(
-            answer_sheet,
-            threshold_percent=threshold,
-            debug=show_visualization
-        )
-        
-        if not result:
-            print("[ERROR] Failed to extract answers")
-            return None
-        
-        # Save extraction results
-        extraction_json = save_extraction_to_json(result)
-        
-        print("\n" + "="*70)
-        print("PART B: GRADING")
-        print("="*70)
-        
-        # Load answer key
-        answer_key_data = load_answer_key(key_json)
-        
-        # Prepare scanned answers data in expected format
-        scanned_answers_data = {
-            'metadata': result['metadata'],
-            'answers': result['answers']
+        # Color scheme
+        self.colors = {
+            'primary': '#2196F3',
+            'success': '#4CAF50',
+            'warning': '#FF9800',
+            'danger': '#F44336',
+            'bg': '#F5F5F5',
+            'card': '#FFFFFF',
+            'text': '#212121',
+            'text_light': '#757575'
         }
         
-        # Get grading options
-        max_pts = input(f"\nMaximum points (default: {len(result['answers'])}): ").strip()
-        if max_pts:
-            try:
-                max_points = float(max_pts)
-            except ValueError:
-                max_points = None
-        else:
-            max_points = None
+        # Configure styles
+        self.setup_styles()
         
-        partial = input("Enable partial credit? (y/n, default n): ").strip().lower()
-        partial_credit = (partial == 'y')
+        # Create main UI
+        self.create_ui()
         
-        # Grade the answers
-        print("\nGrading answers...")
-        
-        grade_results = grade_answers(
-            answer_key_data,
-            scanned_answers_data,
-            max_points=max_points,
-            partial_credit=partial_credit
-        )
-        
-        # Display results
-        print_grading_summary(grade_results)
-
-        if show_details == True:
-            # Show details?
-            show_details = input("\nShow detailed results? (y/n): ").strip().lower()
-            if show_details == 'y':
-                from core.grading import print_detailed_results
-                
-                show_option = input("Show (a)ll, (i)ncorrect only, or (f)irst 10? [f]: ").strip().lower()
-                if show_option == 'a':
-                    print_detailed_results(grade_results, show_all=True)
-                elif show_option == 'i':
-                    print_detailed_results(grade_results, show_incorrect_only=True)
-                else:
-                    print_detailed_results(grade_results, show_all=False)
-        
-        # Save grade report
-        report_json = save_grade_report(grade_results, key_json, extraction_json)
-        print(f"\n[SUCCESS] Grade report saved: {report_json}")
-        
-        return {
-            'extraction': extraction_json,
-            'grade_report': report_json,
-            'student_id': result.get('student_id'),
-            'grade_results': grade_results
-        }
-        
-    except ImportError as e:
-        print(f"[ERROR] Failed to import required modules: {e}")
-        return None
-    except Exception as e:
-        print(f"[ERROR] Failed to extract and grade: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
-
-
-def run_full_pipeline():
-    """Run the complete pipeline"""
-    print("="*70)
-    print("COMPLETE ANSWER SHEET PROCESSING PIPELINE")
-    print("="*70)
-    print("\nThis pipeline will guide you through:")
-    print("  1. Creating a blank PDF answer sheet")
-    print("  2. Extracting bubble positions (questions + student ID)")
-    print("  3. Creating an answer key")
-    print("  4. Extracting answers and grading")
-    
-    input("\nPress Enter to start...")
-    
-    # Step 1: Create blank PDF
-    pdf_path = step1_create_blank_sheet()
-    if not pdf_path:
-        print("\n[ABORTED] Pipeline stopped at Step 1")
-        return
-    
-    # Step 2: Extract bubble positions
-    template_json = step2_extract_bubble_positions(pdf_path)
-    if not template_json:
-        print("\n[ABORTED] Pipeline stopped at Step 2")
-        return
-    
-    # Step 3: Create answer key
-    key_json = step3_create_answer_key(template_json)
-    if not key_json:
-        print("\n[ABORTED] Pipeline stopped at Step 3")
-        return
-    
-    # Step 4: Extract and grade
-    final_results = step4_extract_and_grade(template_json, key_json)
-    if not final_results:
-        print("\n[ABORTED] Pipeline stopped at Step 4")
-        return
-    
-    # Success!
-    print("\n" + "="*70)
-    print("PIPELINE COMPLETED SUCCESSFULLY!")
-    print("="*70)
-    print("\nGenerated files:")
-    print(f"  1. Blank template: {pdf_path}")
-    print(f"  2. Template JSON: {template_json}")
-    print(f"  3. Answer key: {key_json}")
-    print(f"  4. Extracted answers: {final_results['extraction']}")
-    print(f"  5. Grade report: {final_results['grade_report']}")
-    
-    if final_results.get('student_id'):
-        print(f"\nStudent ID: {final_results['student_id']['student_id']}")
-    
-    print(f"\nFinal Score: {final_results['grade_results']['score']:.2f} / {final_results['grade_results']['max_points']:.2f}")
-    print(f"Percentage: {final_results['grade_results']['percentage']:.2f}%")
-    
-    print("\n✓ All files saved and ready for use!")
-
-def batch_grade_images(template_json, key_json, images_path, output_dir=None, threshold=50, partial_credit=False, show_visualization=False):
-    """
-    Batch process and grade a folder (or list) of filled answer sheet images.
-    Saves two summaries:
-      - batch_summary.json (existing detailed summary)
-      - batch_results_compact.csv (compact CSV with format:
-          student_id,score,percentage,Q1,Q2,...,Qn
-        where Qk is 1 for correct, 0 for wrong)
-    """
-    from core.extraction import BubbleTemplate, AnswerSheetExtractor, save_extraction_to_json
-    from core.grading import load_answer_key, grade_answers, save_grade_report
-
-    import glob
-    import csv
-    import json
-    import os
-
-    # Resolve images list
-    if isinstance(images_path, str) and os.path.isdir(images_path):
-        patterns = ['*.png', '*.jpg', '*.jpeg', '*.tif', '*.tiff', '*.bmp']
-        image_files = []
-        for p in patterns:
-            image_files.extend(sorted(glob.glob(os.path.join(images_path, p))))
-    elif isinstance(images_path, str) and (',' in images_path):
-        image_files = [p.strip() for p in images_path.split(',') if p.strip()]
-    else:
-        image_files = [images_path] if images_path else []
-
-    image_files = [p for p in image_files if os.path.exists(p)]
-    if not image_files:
-        print(f"[ERROR] No valid images found for: {images_path}")
-        return None
-
-    if output_dir is None:
-        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-        output_dir = os.path.join(os.getcwd(), f"batch_results_{ts}")
-    os.makedirs(output_dir, exist_ok=True)
-
-    answer_key_data = load_answer_key(key_json)
-    # Attempt to get canonical answer mapping and number of questions
-    key_answers = answer_key_data.get('answers') if isinstance(answer_key_data, dict) else None
-    try:
-        total_questions = int(answer_key_data.get('metadata', {}).get('total_questions') or len(key_answers or {}))
-    except Exception:
-        total_questions = None
-
-    template = BubbleTemplate(template_json)
-    extractor = AnswerSheetExtractor(template)
-
-    summary = []
-    compact_rows = []  # rows for the compact CSV: [student_id, score, percentage, q1,...,qN]
-
-    def _per_question_outcomes_from_grade(grade_results, total_q=None):
-        """
-        Try to extract per-question correct(1)/wrong(0) sequence from grader output.
-        Returns list length total_q if known, else best-effort list.
-        """
-        outcomes = []
-        # Preferred: grade_results['details'] where each question has 'points' and full points known
-        details = grade_results.get('details') if isinstance(grade_results, dict) else None
-        summary = grade_results.get('summary') if isinstance(grade_results, dict) else None
-
-        points_per_q = None
-        if summary and isinstance(summary, dict):
-            points_per_q = summary.get('points_per_question') or None
-            if points_per_q is None:
-                maxp = summary.get('max_points') or summary.get('max_score') or None
-                tq = summary.get('total_questions') or summary.get('total') or None
-                try:
-                    if maxp is not None and tq:
-                        points_per_q = float(maxp) / int(tq)
-                except Exception:
-                    points_per_q = None
-
-            if total_q is None:
-                total_q = summary.get('total_questions') or summary.get('total') or total_q
-
-        if details and isinstance(details, dict):
-            # details keys may be "1","2",...
-            ordered_keys = sorted(details.keys(), key=lambda k: int(k))
-            for k in ordered_keys:
-                info = details[k] or {}
-                pts = info.get('points')
-                if pts is None:
-                    # maybe boolean 'correct'
-                    correct_flag = info.get('correct')
-                    outcomes.append(1 if correct_flag else 0)
-                else:
-                    if points_per_q is not None:
-                        outcomes.append(1 if abs(float(pts) - float(points_per_q)) < 1e-6 else 0)
-                    else:
-                        outcomes.append(1 if float(pts) > 0 else 0)
-            # pad/truncate to total_q if known
-            if total_q:
-                outcomes = (outcomes + [0]*total_q)[:total_q]
-            return outcomes
-
-        # Fallback: try grade_results['answers_correct'] or similar structures
-        if isinstance(grade_results.get('answers'), dict):
-            # compare each answer with key if available
-            if key_answers:
-                for q in sorted(key_answers.keys(), key=lambda kk: int(kk)):
-                    correct_ans = key_answers.get(q)
-                    scanned_ans = grade_results.get('answers', {}).get(q)  # sometimes included
-                    outcomes.append(1 if scanned_ans == correct_ans else 0)
-                if total_q:
-                    outcomes = (outcomes + [0]*total_q)[:total_q]
-                return outcomes
-
-        return outcomes
-
-    for img_path in image_files:
+    def connect_db(self):
+        """Connect to MongoDB"""
         try:
-            print(f"\n[INFO] Processing: {img_path}")
-            result = extractor.extract_complete(img_path, threshold_percent=threshold, debug=show_visualization)
-            if not result:
-                print(f"[WARN] Extraction failed for {img_path}")
-                summary.append({'image': img_path, 'status': 'extraction_failed'})
-                continue
-
-            extraction_json = save_extraction_to_json(result, output_dir=output_dir)
-
-            # Prepare scanned answers format expected by grader
-            scanned_answers_data = {
-                'metadata': result.get('metadata', {}),
-                'answers': result.get('answers', {})
-            }
-
-            grade_results = grade_answers(answer_key_data, scanned_answers_data, max_points=None, partial_credit=partial_credit)
-            report_json = save_grade_report(grade_results, key_json, extraction_json)
-
-            # Extract student id if present
-            student_id = None
-            sid = result.get('student_id')
-            if isinstance(sid, dict):
-                student_id = sid.get('student_id')
-            elif isinstance(sid, str):
-                student_id = sid
-
-            # Extract core score/percentage
-            score = None
-            percentage = None
-            try:
-                sc = grade_results.get('summary', {}).get('score') if isinstance(grade_results.get('summary'), dict) else grade_results.get('score')
-                mp = grade_results.get('summary', {}).get('max_points') if isinstance(grade_results.get('summary'), dict) else grade_results.get('max_points')
-                pct = grade_results.get('summary', {}).get('percentage') if isinstance(grade_results.get('summary'), dict) else grade_results.get('percentage')
-                if sc is not None:
-                    score = sc
-                if pct is not None:
-                    percentage = pct
-                elif score is not None and mp is not None:
-                    percentage = (float(score) / float(mp) * 100.0) if mp else None
-            except Exception:
-                pass
-
-            # Determine per-question outcomes (1/0)
-            outcomes = _per_question_outcomes_from_grade(grade_results, total_q=total_questions)
-            # If outcomes empty and we have scanned answers + key, compute directly
-            if (not outcomes or len(outcomes) == 0) and key_answers:
-                scanned = scanned_answers_data.get('answers') or {}
-                ordered_qs = sorted(key_answers.keys(), key=lambda kk: int(kk))
-                for q in ordered_qs:
-                    outcomes.append(1 if str(scanned.get(q)).strip() == str(key_answers.get(q)).strip() else 0)
-                if total_questions:
-                    outcomes = (outcomes + [0]*total_questions)[:total_questions]
-
-            # Prepare compact row
-            sid_display = student_id if student_id else ""
-            score_display = score if score is not None else grade_results.get('score')
-            pct_display = percentage if percentage is not None else grade_results.get('percentage')
-
-            compact_row = [sid_display, score_display, pct_display]
-            compact_row.extend(outcomes)
-
-            # Print simple line as requested
-            # Print student id, score, correct/total
-            correct_count = sum(outcomes) if outcomes else None
-            total_q_display = total_questions if total_questions is not None else (len(outcomes) if outcomes else "N/A")
-            if correct_count is not None:
-                print(f"{sid_display} | score: {score_display} | {correct_count}/{total_q_display}")
-            else:
-                print(f"{sid_display} | score: {score_display} | details unavailable")
-
-            summary.append({
-                'image': img_path,
-                'status': 'ok',
-                'student_id': student_id,
-                'extraction_json': extraction_json,
-                'report_json': report_json,
-                'score': score_display,
-                'max_points': grade_results.get('max_points'),
-                'percentage': pct_display
-            })
-            compact_rows.append(compact_row)
-
+            client = MongoClient('mongodb://localhost:27017/')
+            self.db = client['grading_system']
+            print("✅ Connected to MongoDB")
         except Exception as e:
-            print(f"[ERROR] Processing {img_path} failed: {e}")
-            summary.append({'image': img_path, 'status': 'error', 'error': str(e)})
-
-    # Save detailed summary JSON (existing)
-    summary_json_path = os.path.join(output_dir, 'batch_summary.json')
-    with open(summary_json_path, 'w', encoding='utf-8') as f:
-        json.dump(summary, f, indent=2, ensure_ascii=False)
-
-    # Build and save compact CSV with header: student_id,score,percentage,Q1,Q2,...Qn
-    csv_path = os.path.join(output_dir, 'batch_results.csv')
-    # determine max question columns present
-    max_qcols = 0
-    for row in compact_rows:
-        qcols = max(0, len(row) - 3)
-        if qcols > max_qcols:
-            max_qcols = qcols
-    # If total_questions known prefer that
-    if total_questions:
-        max_qcols = total_questions
-
-    headers = ['student_id', 'score', 'percentage'] + [f"Q{i+1}" for i in range(max_qcols)]
-    with open(csv_path, 'w', newline='', encoding='utf-8') as csvf:
-        writer = csv.writer(csvf)
-        writer.writerow(headers)
-        for row in compact_rows:
-            # ensure row length equals 3 + max_qcols
-            base = row[:3]
-            qvals = row[3:] if len(row) > 3 else []
-            qvals = qvals + [0] * (max_qcols - len(qvals))
-            writer.writerow(base + qvals)
-
-    print(f"\n[SUMMARY] Batch finished. Compact CSV saved to: {csv_path}")
-    return {'output_dir': output_dir, 'summary_json': summary_json_path, 'compact_csv': csv_path, 'items': summary}
-
-
-def run_steps_individually():
-    """Run individual steps"""
-    print("="*70)
-    print("INDIVIDUAL STEP MODE")
-    print("="*70)
-    print("\nChoose which step to run:")
-    print("1. Create blank PDF sheet")
-    print("2. Extract bubble positions from PDF")
-    print("3. Create answer key")
-    print("4. Extract answers and grade")
+            print(f"❌ MongoDB connection failed: {e}")
+            messagebox.showerror("Database Error", 
+                "Failed to connect to MongoDB.\nPlease ensure MongoDB is running.")
     
-    choice = input("\nEnter choice (1-4): ").strip()
+    def setup_styles(self):
+        """Configure ttk styles"""
+        style = ttk.Style()
+        style.theme_use('clam')
+        
+        # Configure button styles
+        style.configure('Primary.TButton', 
+            background=self.colors['primary'],
+            foreground='white',
+            padding=10,
+            font=('Segoe UI', 10))
+        
+        style.configure('Success.TButton',
+            background=self.colors['success'],
+            foreground='white',
+            padding=10,
+            font=('Segoe UI', 10))
+        
+        # Configure frame styles
+        style.configure('Card.TFrame',
+            background=self.colors['card'],
+            relief='flat')
+        
+        # Configure label styles
+        style.configure('Title.TLabel',
+            background=self.colors['card'],
+            foreground=self.colors['text'],
+            font=('Segoe UI', 16, 'bold'))
+        
+        style.configure('Subtitle.TLabel',
+            background=self.colors['card'],
+            foreground=self.colors['text_light'],
+            font=('Segoe UI', 10))
     
-    if choice == '1':
-        step1_create_blank_sheet()
+    def create_ui(self):
+        """Create main UI layout"""
+        # Header
+        self.create_header()
+        
+        # Main container
+        main_container = ttk.Frame(self.root)
+        main_container.pack(fill='both', expand=True, padx=20, pady=10)
+        
+        # Left panel - Navigation
+        self.create_navigation(main_container)
+        
+        # Right panel - Content
+        self.content_frame = ttk.Frame(main_container)
+        self.content_frame.pack(side='left', fill='both', expand=True, padx=(20, 0))
+        
+        # Show dashboard by default
+        self.show_dashboard()
     
-    elif choice == '2':
-        pdf_path = input("Enter PDF path: ").strip()
-        step2_extract_bubble_positions(pdf_path)
+    def create_header(self):
+        """Create header section"""
+        header = tk.Frame(self.root, bg=self.colors['primary'], height=80)
+        header.pack(fill='x')
+        header.pack_propagate(False)
+        
+        title = tk.Label(header, 
+            text="📝 Answer Sheet Grading System",
+            bg=self.colors['primary'],
+            fg='white',
+            font=('Segoe UI', 20, 'bold'))
+        title.pack(pady=20, padx=30, anchor='w')
     
-    elif choice == '3':
-        template_json = input("Enter template JSON path: ").strip()
-        step3_create_answer_key(template_json)
+    def create_navigation(self, parent):
+        """Create navigation panel"""
+        nav_frame = ttk.Frame(parent, width=250)
+        nav_frame.pack(side='left', fill='y')
+        nav_frame.pack_propagate(False)
+        
+        nav_items = [
+            ("🏠 Dashboard", self.show_dashboard),
+            ("📄 Create Sheet", self.show_create_sheet),
+            ("📊 Extract Template", self.show_extract_template),
+            ("🔑 Create Answer Key", self.show_create_key),
+            ("✏️ Grade Single Sheet", self.show_grade_single),
+            ("📚 Batch Grading", self.show_batch_grading),
+            ("👨‍🎓 Students", self.show_students),
+            ("📈 Reports", self.show_reports),
+            ("⚙️ Settings", self.show_settings)
+        ]
+        
+        for text, command in nav_items:
+            btn = tk.Button(nav_frame,
+                text=text,
+                command=command,
+                bg='white',
+                fg=self.colors['text'],
+                font=('Segoe UI', 11),
+                anchor='w',
+                padx=20,
+                pady=15,
+                relief='flat',
+                cursor='hand2')
+            btn.pack(fill='x', pady=2)
+            
+            # Hover effects
+            btn.bind('<Enter>', lambda e, b=btn: b.configure(bg=self.colors['bg']))
+            btn.bind('<Leave>', lambda e, b=btn: b.configure(bg='white'))
     
-    elif choice == '4':
-        template_json = input("Enter template JSON path: ").strip()
-        key_json = input("Enter answer key JSON path: ").strip()
-        step4_extract_and_grade(template_json, key_json)
+    def clear_content(self):
+        """Clear content frame"""
+        for widget in self.content_frame.winfo_children():
+            widget.destroy()
     
-    else:
-        print("Invalid choice")
-
-
-def main():
-    """Main function"""
-    print("\n" + "="*70)
-    print("ANSWER SHEET PROCESSING SYSTEM - TEST PIPELINE")
-    print("="*70)
-
-    print("\nChoose mode:")
-    print("1. Full pipeline (run all steps from scratch)")
-    print("2. Batch grade images (folder or list)")
-    print("0. Exit")
-
-    choice = input("\nEnter choice (1-5): ").strip()
-    if choice == '1':
-        run_full_pipeline()
-    elif choice == '0':
-        print("Exiting...")
-    elif choice == '2':
-        pdf_path = step1_create_blank_sheet()
-        template_json = step2_extract_bubble_positions(pdf_path)
-        key_json = step3_create_answer_key(template_json)
-        images = input("Enter images folder path or comma-separated list of images: ").strip()
-        out_dir = input("Output directory (leave empty for auto): ").strip() or None
-        thr = input("Detection threshold (default 50): ").strip()
-        thr = int(thr) if thr else 50
-        pc = input("Enable partial credit? (y/n, default n): ").strip().lower() == 'y'
-        batch_grade_images(template_json, key_json, images, output_dir=out_dir, threshold=thr, partial_credit=pc, show_visualization=False)
-    else:
-        print("Invalid choice")
-
-
-if __name__ == "__main__":
-    main()
+    def create_card(self, parent, title):
+        """Create a card widget"""
+        card = ttk.Frame(parent, style='Card.TFrame', relief='solid', borderwidth=1)
+        card.pack(fill='both', expand=True, padx=10, pady=10)
+        
+        # Title
+        title_label = ttk.Label(card, text=title, style='Title.TLabel')
+        title_label.pack(pady=(20, 10), padx=20, anchor='w')
+        
+        # Content frame
+        content = ttk.Frame(card, style='Card.TFrame')
+        content.pack(fill='both', expand=True, padx=20, pady=(0, 20))
+        
+        return card, content
+    
+    # ===== VIEW METHODS =====
+    
+    def show_dashboard(self):
+        """Show dashboard view"""
+        self.clear_content()
+        
+        # Welcome message
+        welcome = ttk.Label(self.content_frame,
+            text="Welcome to Answer Sheet Grading System",
+            style='Title.TLabel')
+        welcome.pack(pady=20)
+        
+        # Stats container
+        stats_container = ttk.Frame(self.content_frame)
+        stats_container.pack(fill='x', pady=20)
+        
+        # Get statistics from DB
+        stats = self.get_dashboard_stats()
+        
+        # Create stat cards
+        stat_items = [
+            ("📄 Templates", stats['templates'], self.colors['primary']),
+            ("🔑 Answer Keys", stats['answer_keys'], self.colors['success']),
+            ("👨‍🎓 Students", stats['students'], self.colors['warning']),
+            ("📝 Submissions", stats['submissions'], self.colors['danger'])
+        ]
+        
+        for i, (title, value, color) in enumerate(stat_items):
+            stat_card = tk.Frame(stats_container, bg=color, relief='solid', borderwidth=0)
+            stat_card.grid(row=0, column=i, padx=10, pady=10, sticky='ew')
+            stats_container.grid_columnconfigure(i, weight=1)
+            
+            tk.Label(stat_card,
+                text=title,
+                bg=color,
+                fg='white',
+                font=('Segoe UI', 12)).pack(pady=(20, 5))
+            
+            tk.Label(stat_card,
+                text=str(value),
+                bg=color,
+                fg='white',
+                font=('Segoe UI', 28, 'bold')).pack(pady=(5, 20))
+        
+        # Recent activity
+        card, content = self.create_card(self.content_frame, "Recent Activity")
+        
+        # Activity list
+        activity_list = ttk.Treeview(content,
+            columns=('Type', 'Name', 'Date'),
+            show='headings',
+            height=10)
+        
+        activity_list.heading('Type', text='Type')
+        activity_list.heading('Name', text='Name')
+        activity_list.heading('Date', text='Date')
+        
+        activity_list.column('Type', width=150)
+        activity_list.column('Name', width=300)
+        activity_list.column('Date', width=200)
+        
+        # Get recent activity
+        recent = self.get_recent_activity()
+        for item in recent:
+            activity_list.insert('', 'end', values=item)
+        
+        activity_list.pack(fill='both', expand=True)
+    
+    def show_create_sheet(self):
+        """Show create sheet view"""
+        self.clear_content()
+        
+        card, content = self.create_card(self.content_frame, "Create Blank Answer Sheet")
+        
+        # Form
+        form_frame = ttk.Frame(content)
+        form_frame.pack(fill='x', pady=20)
+        
+        # Number of questions
+        ttk.Label(form_frame, text="Number of Questions:").grid(row=0, column=0, sticky='w', pady=10)
+        questions_var = tk.StringVar(value="40")
+        questions_entry = ttk.Entry(form_frame, textvariable=questions_var, width=30)
+        questions_entry.grid(row=0, column=1, sticky='w', pady=10, padx=(10, 0))
+        
+        # Output filename
+        ttk.Label(form_frame, text="Output Filename:").grid(row=1, column=0, sticky='w', pady=10)
+        filename_var = tk.StringVar(value="answer_sheet.pdf")
+        filename_entry = ttk.Entry(form_frame, textvariable=filename_var, width=30)
+        filename_entry.grid(row=1, column=1, sticky='w', pady=10, padx=(10, 0))
+        
+        # Student ID option
+        include_id_var = tk.BooleanVar(value=True)
+        id_check = ttk.Checkbutton(form_frame,
+            text="Include Student ID bubbles",
+            variable=include_id_var)
+        id_check.grid(row=2, column=0, columnspan=2, sticky='w', pady=10)
+        
+        # Output log
+        log_label = ttk.Label(content, text="Output:")
+        log_label.pack(anchor='w', pady=(20, 5))
+        
+        log_text = scrolledtext.ScrolledText(content, height=10, wrap='word')
+        log_text.pack(fill='both', expand=True)
+        
+        # Create button
+        def create_sheet():
+            try:
+                num_questions = int(questions_var.get())
+                output_path = filename_var.get()
+                
+                log_text.insert('end', f"Creating {num_questions}-question answer sheet...\n")
+                log_text.see('end')
+                
+                # Create designer
+                from core.sheet_maker import AnswerSheetDesigner
+                designer = AnswerSheetDesigner()
+                designer.set_config(include_student_id=include_id_var.get())
+                
+                # Generate PDF
+                designer.create_answer_sheet(
+                    total_questions=num_questions,
+                    output_path=output_path,
+                    format='pdf',
+                    use_preset=True
+                )
+                
+                log_text.insert('end', f"✅ Success! Saved to: {output_path}\n")
+                log_text.see('end')
+                
+                messagebox.showinfo("Success", f"Answer sheet created: {output_path}")
+                
+            except Exception as e:
+                log_text.insert('end', f"❌ Error: {str(e)}\n")
+                log_text.see('end')
+                messagebox.showerror("Error", str(e))
+        
+        create_btn = ttk.Button(content,
+            text="Create Answer Sheet",
+            command=create_sheet,
+            style='Primary.TButton')
+        create_btn.pack(pady=20)
+    
+    def show_extract_template(self):
+        """Show extract template view"""
+        self.clear_content()
+        
+        card, content = self.create_card(self.content_frame, "Extract Bubble Template")
+        
+        # Form
+        form_frame = ttk.Frame(content)
+        form_frame.pack(fill='x', pady=20)
+        
+        # PDF file selection
+        ttk.Label(form_frame, text="Template PDF:").grid(row=0, column=0, sticky='w', pady=10)
+        pdf_var = tk.StringVar()
+        pdf_entry = ttk.Entry(form_frame, textvariable=pdf_var, width=40)
+        pdf_entry.grid(row=0, column=1, sticky='w', pady=10, padx=(10, 0))
+        
+        def browse_pdf():
+            filename = filedialog.askopenfilename(
+                title="Select Template PDF",
+                filetypes=[("PDF files", "*.pdf")])
+            if filename:
+                pdf_var.set(filename)
+        
+        browse_btn = ttk.Button(form_frame, text="Browse", command=browse_pdf)
+        browse_btn.grid(row=0, column=2, pady=10, padx=(10, 0))
+        
+        # DPI setting
+        ttk.Label(form_frame, text="DPI:").grid(row=1, column=0, sticky='w', pady=10)
+        dpi_var = tk.StringVar(value="300")
+        dpi_combo = ttk.Combobox(form_frame, textvariable=dpi_var, width=15, values=["150", "300", "600"])
+        dpi_combo.grid(row=1, column=1, sticky='w', pady=10, padx=(10, 0))
+        
+        # Show visualization
+        show_viz_var = tk.BooleanVar(value=True)
+        viz_check = ttk.Checkbutton(form_frame,
+            text="Show visualization",
+            variable=show_viz_var)
+        viz_check.grid(row=2, column=0, columnspan=2, sticky='w', pady=10)
+        
+        # Output log
+        log_text = scrolledtext.ScrolledText(content, height=15, wrap='word')
+        log_text.pack(fill='both', expand=True, pady=(20, 0))
+        
+        # Extract button
+        def extract_template():
+            pdf_path = pdf_var.get()
+            if not pdf_path or not os.path.exists(pdf_path):
+                messagebox.showerror("Error", "Please select a valid PDF file")
+                return
+            
+            try:
+                log_text.insert('end', f"Processing: {pdf_path}\n")
+                log_text.see('end')
+                
+                from core.bubble_extraction import process_pdf_answer_sheet
+                
+                json_path = process_pdf_answer_sheet(
+                    pdf_path=pdf_path,
+                    dpi=int(dpi_var.get()),
+                    keep_png=False,
+                    show_visualization=show_viz_var.get()
+                )
+                
+                if json_path:
+                    log_text.insert('end', f"✅ Template saved: {json_path}\n")
+                    log_text.see('end')
+                    
+                    # Save to database
+                    self.save_template_to_db(json_path, pdf_path)
+                    
+                    messagebox.showinfo("Success", f"Template extracted: {json_path}")
+                else:
+                    log_text.insert('end', "❌ Extraction failed\n")
+                    log_text.see('end')
+                    
+            except Exception as e:
+                log_text.insert('end', f"❌ Error: {str(e)}\n")
+                log_text.see('end')
+                messagebox.showerror("Error", str(e))
+        
+        extract_btn = ttk.Button(content,
+            text="Extract Template",
+            command=extract_template,
+            style='Success.TButton')
+        extract_btn.pack(pady=20)
+    
+    def show_create_key(self):
+        """Show create answer key view"""
+        self.clear_content()
+        
+        card, content = self.create_card(self.content_frame, "Create Answer Key")
+        
+        # Template selection
+        form_frame = ttk.Frame(content)
+        form_frame.pack(fill='x', pady=20)
+        
+        ttk.Label(form_frame, text="Select Template:").grid(row=0, column=0, sticky='w', pady=10)
+        
+        # Get templates from DB
+        templates = list(self.db.templates.find({'status': 'active'}))
+        template_names = [t['name'] for t in templates]
+        
+        template_var = tk.StringVar()
+        template_combo = ttk.Combobox(form_frame, textvariable=template_var, width=40, values=template_names)
+        template_combo.grid(row=0, column=1, sticky='w', pady=10, padx=(10, 0))
+        
+        # Method selection
+        ttk.Label(form_frame, text="Method:").grid(row=1, column=0, sticky='w', pady=10)
+        method_var = tk.StringVar(value="manual")
+        
+        ttk.Radiobutton(form_frame,
+            text="Manual entry",
+            variable=method_var,
+            value="manual").grid(row=1, column=1, sticky='w', pady=5, padx=(10, 0))
+        
+        ttk.Radiobutton(form_frame,
+            text="Scan master sheet",
+            variable=method_var,
+            value="scan").grid(row=2, column=1, sticky='w', pady=5, padx=(10, 0))
+        
+        # Output log
+        log_text = scrolledtext.ScrolledText(content, height=15, wrap='word')
+        log_text.pack(fill='both', expand=True, pady=(20, 0))
+        
+        # Create button
+        def create_key():
+            template_name = template_var.get()
+            if not template_name:
+                messagebox.showerror("Error", "Please select a template")
+                return
+            
+            # Find template
+            template = next((t for t in templates if t['name'] == template_name), None)
+            if not template:
+                messagebox.showerror("Error", "Template not found")
+                return
+            
+            try:
+                log_text.insert('end', f"Creating answer key for: {template_name}\n")
+                log_text.see('end')
+                
+                # Implementation depends on method
+                if method_var.get() == "manual":
+                    # Open manual entry dialog
+                    self.open_manual_key_entry(template, log_text)
+                else:
+                    # Scan master sheet
+                    master_path = filedialog.askopenfilename(
+                        title="Select Master Answer Sheet",
+                        filetypes=[("Image files", "*.png *.jpg *.jpeg")])
+                    
+                    if master_path:
+                        self.create_key_from_scan(template, master_path, log_text)
+                
+            except Exception as e:
+                log_text.insert('end', f"❌ Error: {str(e)}\n")
+                log_text.see('end')
+                messagebox.showerror("Error", str(e))
+        
+        create_btn = ttk.Button(content,
+            text="Create Answer Key",
+            command=create_key,
+            style='Primary.TButton')
+        create_btn.pack(pady=20)
+    
+    def show_grade_single(self):
+        """Show grade single sheet view"""
+        self.clear_content()
+        
+        card, content = self.create_card(self.content_frame, "Grade Single Answer Sheet")
+        
+        # Form
+        form_frame = ttk.Frame(content)
+        form_frame.pack(fill='x', pady=20)
+        
+        # Template selection
+        ttk.Label(form_frame, text="Template:").grid(row=0, column=0, sticky='w', pady=10)
+        templates = list(self.db.templates.find({'status': 'active'}))
+        template_names = [t['name'] for t in templates]
+        template_var = tk.StringVar()
+        template_combo = ttk.Combobox(form_frame, textvariable=template_var, width=35, values=template_names)
+        template_combo.grid(row=0, column=1, sticky='w', pady=10, padx=(10, 0))
+        
+        # Answer key selection
+        ttk.Label(form_frame, text="Answer Key:").grid(row=1, column=0, sticky='w', pady=10)
+        keys = list(self.db.answer_keys.find({'status': 'active'}))
+        key_names = [k['name'] for k in keys]
+        key_var = tk.StringVar()
+        key_combo = ttk.Combobox(form_frame, textvariable=key_var, width=35, values=key_names)
+        key_combo.grid(row=1, column=1, sticky='w', pady=10, padx=(10, 0))
+        
+        # Image selection
+        ttk.Label(form_frame, text="Answer Sheet:").grid(row=2, column=0, sticky='w', pady=10)
+        image_var = tk.StringVar()
+        image_entry = ttk.Entry(form_frame, textvariable=image_var, width=35)
+        image_entry.grid(row=2, column=1, sticky='w', pady=10, padx=(10, 0))
+        
+        def browse_image():
+            filename = filedialog.askopenfilename(
+                title="Select Answer Sheet",
+                filetypes=[("Image files", "*.png *.jpg *.jpeg *.bmp")])
+            if filename:
+                image_var.set(filename)
+        
+        browse_btn = ttk.Button(form_frame, text="Browse", command=browse_image)
+        browse_btn.grid(row=2, column=2, pady=10, padx=(10, 0))
+        
+        # Threshold
+        ttk.Label(form_frame, text="Threshold (%):").grid(row=3, column=0, sticky='w', pady=10)
+        threshold_var = tk.StringVar(value="50")
+        threshold_spin = ttk.Spinbox(form_frame, from_=20, to=90, textvariable=threshold_var, width=10)
+        threshold_spin.grid(row=3, column=1, sticky='w', pady=10, padx=(10, 0))
+        
+        # Results frame
+        results_frame = ttk.LabelFrame(content, text="Results", padding=10)
+        results_frame.pack(fill='both', expand=True, pady=20)
+        
+        results_text = scrolledtext.ScrolledText(results_frame, height=15, wrap='word')
+        results_text.pack(fill='both', expand=True)
+        
+        # Grade button
+        def grade_sheet():
+            # Validate inputs
+            if not all([template_var.get(), key_var.get(), image_var.get()]):
+                messagebox.showerror("Error", "Please fill all fields")
+                return
+            
+            try:
+                results_text.insert('end', "Starting grading process...\n")
+                results_text.see('end')
+                
+                # Find template and key
+                template = next((t for t in templates if t['name'] == template_var.get()), None)
+                answer_key = next((k for k in keys if k['name'] == key_var.get()), None)
+                
+                if not template or not answer_key:
+                    messagebox.showerror("Error", "Template or key not found")
+                    return
+                
+                # Grade the sheet
+                result = self.grade_single_sheet(
+                    template['json_path'],
+                    answer_key,
+                    image_var.get(),
+                    int(threshold_var.get()),
+                    results_text
+                )
+                
+                if result:
+                    results_text.insert('end', "\n✅ Grading complete!\n")
+                    results_text.insert('end', f"Student ID: {result.get('student_id', 'N/A')}\n")
+                    results_text.insert('end', f"Score: {result['score']}/{result['max_score']}\n")
+                    results_text.insert('end', f"Percentage: {result['percentage']:.2f}%\n")
+                    results_text.insert('end', f"Grade: {result['letter_grade']}\n")
+                    results_text.see('end')
+                    
+                    messagebox.showinfo("Success", "Grading completed successfully!")
+                
+            except Exception as e:
+                results_text.insert('end', f"\n❌ Error: {str(e)}\n")
+                results_text.see('end')
+                messagebox.showerror("Error", str(e))
+        
+        grade_btn = ttk.Button(content,
+            text="Grade Answer Sheet",
+            command=grade_sheet,
+            style='Success.TButton')
+        grade_btn.pack(pady=10)
+    
+    def show_batch_grading(self):
+        """Show batch grading view"""
+        self.clear_content()
+        
+        card, content = self.create_card(self.content_frame, "Batch Grading")
+        
+        # Form
+        form_frame = ttk.Frame(content)
+        form_frame.pack(fill='x', pady=20)
+        
+        # Template selection
+        ttk.Label(form_frame, text="Template:").grid(row=0, column=0, sticky='w', pady=10)
+        templates = list(self.db.templates.find({'status': 'active'}))
+        template_names = [t['name'] for t in templates]
+        template_var = tk.StringVar()
+        template_combo = ttk.Combobox(form_frame, textvariable=template_var, width=35, values=template_names)
+        template_combo.grid(row=0, column=1, sticky='w', pady=10, padx=(10, 0))
+        
+        # Answer key selection
+        ttk.Label(form_frame, text="Answer Key:").grid(row=1, column=0, sticky='w', pady=10)
+        keys = list(self.db.answer_keys.find({'status': 'active'}))
+        key_names = [k['name'] for k in keys]
+        key_var = tk.StringVar()
+        key_combo = ttk.Combobox(form_frame, textvariable=key_var, width=35, values=key_names)
+        key_combo.grid(row=1, column=1, sticky='w', pady=10, padx=(10, 0))
+        
+        # Folder selection
+        ttk.Label(form_frame, text="Images Folder:").grid(row=2, column=0, sticky='w', pady=10)
+        folder_var = tk.StringVar()
+        folder_entry = ttk.Entry(form_frame, textvariable=folder_var, width=35)
+        folder_entry.grid(row=2, column=1, sticky='w', pady=10, padx=(10, 0))
+        
+        def browse_folder():
+            folder = filedialog.askdirectory(title="Select Folder with Answer Sheets")
+            if folder:
+                folder_var.set(folder)
+        
+        browse_btn = ttk.Button(form_frame, text="Browse", command=browse_folder)
+        browse_btn.grid(row=2, column=2, pady=10, padx=(10, 0))
+        
+        # Progress frame
+        progress_frame = ttk.LabelFrame(content, text="Progress", padding=10)
+        progress_frame.pack(fill='both', expand=True, pady=20)
+        
+        progress_bar = ttk.Progressbar(progress_frame, mode='determinate')
+        progress_bar.pack(fill='x', pady=10)
+        
+        status_label = ttk.Label(progress_frame, text="Ready")
+        status_label.pack()
+        
+        results_text = scrolledtext.ScrolledText(progress_frame, height=12, wrap='word')
+        results_text.pack(fill='both', expand=True, pady=10)
+        
+        # Start button
+        def start_batch():
+            # Validate
+            if not all([template_var.get(), key_var.get(), folder_var.get()]):
+                messagebox.showerror("Error", "Please fill all fields")
+                return
+            
+            # Find template and key
+            template = next((t for t in templates if t['name'] == template_var.get()), None)
+            answer_key = next((k for k in keys if k['name'] == key_var.get()), None)
+            
+            if not template or not answer_key:
+                messagebox.showerror("Error", "Template or key not found")
+                return
+            
+            # Run in thread
+            def batch_worker():
+                self.process_batch_grading(
+                    template['json_path'],
+                    answer_key,
+                    folder_var.get(),
+                    progress_bar,
+                    status_label,
+                    results_text
+                )
+            
+            thread = threading.Thread(target=batch_worker, daemon=True)
+            thread.start()
+        
+        start_btn = ttk.Button(content,
+            text="Start Batch Grading",
+            command=start_batch,
+            style='Success.TButton')
+        start_btn.pack(pady=10)
+    
+    def show_students(self):
+        """Show students management view"""
+        self.clear_content()
+        
+        card, content = self.create_card(self.content_frame, "Students Management")
+        
+        # Toolbar
+        toolbar = ttk.Frame(content)
+        toolbar.pack(fill='x', pady=(0, 10))
+        
+        ttk.Button(toolbar, text="+ Add Student", command=self.add_student_dialog).pack(side='left', padx=5)
+        ttk.Button(toolbar, text="Import CSV", command=self.import_students_csv).pack(side='left', padx=5)
+        ttk.Button(toolbar, text="Refresh", command=lambda: self.show_students()).pack(side='left', padx=5)
+        
+        # Search
+        search_frame = ttk.Frame(toolbar)
+        search_frame.pack(side='right', padx=5)
+        
+        ttk.Label(search_frame, text="Search:").pack(side='left', padx=5)
+        search_var = tk.StringVar()
+        search_entry = ttk.Entry(search_frame, textvariable=search_var, width=30)

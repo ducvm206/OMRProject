@@ -173,12 +173,12 @@ class AnswerSheetDesigner:
         id_section_height = 10 * id_row_spacing + 50
         
         # Position in bottom right corner
-        start_x = page_width - margins['right'] - id_section_width - 25
-        start_y = margins['bottom'] + id_section_height - 20
+        start_x = page_width - margins['right'] - id_section_width - 10
+        start_y = margins['bottom'] + id_section_height - 10
         
         # Draw title
         c.setFont(font_bold, 10)
-        c.drawString(start_x + 10, start_y + 25, "STUDENT ID")
+        c.drawString(start_x + 20, start_y + 25, "STUDENT ID")
         
         # Draw column headers (digit positions)
         c.setFont(font_regular, 7)
@@ -567,6 +567,6 @@ if __name__ == "__main__":
     print("\n=== Testing Presets ===")
     
     # 10 questions preset
-    designer.create_answer_sheet(32, 'answer_sheet_15.pdf', format='pdf')
+    designer.create_answer_sheet(32, 'answer_sheet_40.pdf', format='pdf')
 
     
