@@ -1,24 +1,35 @@
--- Answer Sheet Grading System Database Schema
+-- Answer Sheet Grading System Database Schema (FIXED)
 -- SQLite 3.x
 
 PRAGMA foreign_keys = ON;
 
 -- ============================================
--- TABLES
+-- TABLES (FIXED RELATIONSHIPS)
 -- ============================================
 
--- 1. Templates - Store answer sheet templates
-CREATE TABLE IF NOT EXISTS templates (
+-- 1. Sheets - Store generated sheet image/pdf files (BASE ENTITY)
+CREATE TABLE IF NOT EXISTS sheets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    file_path TEXT NOT NULL UNIQUE,
-    total_questions INTEGER NOT NULL,
+    image_path TEXT NOT NULL UNIQUE,        -- path to generated PDF or preview image
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    has_student_id BOOLEAN DEFAULT 1,
-    metadata TEXT  -- JSON for additional info
+    notes TEXT,
+    is_template BOOLEAN DEFAULT 0           -- marks if this sheet is used as a template
 );
 
--- 2. Answer Keys - Store correct answers
+-- 2. Templates - Store extracted template JSON from sheets
+CREATE TABLE IF NOT EXISTS templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sheet_id INTEGER NOT NULL,              -- FK -> sheets(id) - the sheet this template was extracted from
+    name TEXT NOT NULL,
+    json_path TEXT NOT NULL UNIQUE,         -- path to the template JSON (extracted)
+    total_questions INTEGER NOT NULL,
+    has_student_id BOOLEAN DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    metadata TEXT,  -- JSON for additional info
+    FOREIGN KEY (sheet_id) REFERENCES sheets(id) ON DELETE CASCADE
+);
+
+-- 3. Answer Keys - Store correct answers (linked to templates)
 CREATE TABLE IF NOT EXISTS answer_keys (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     template_id INTEGER NOT NULL,
@@ -29,7 +40,7 @@ CREATE TABLE IF NOT EXISTS answer_keys (
     FOREIGN KEY (template_id) REFERENCES templates(id) ON DELETE CASCADE
 );
 
--- 3. Students - Store student information
+-- 4. Students - Store student information
 CREATE TABLE IF NOT EXISTS students (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     student_id TEXT UNIQUE NOT NULL,
@@ -38,7 +49,7 @@ CREATE TABLE IF NOT EXISTS students (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 4. Grading Sessions - Group related gradings
+-- 5. Grading Sessions - Group related gradings
 CREATE TABLE IF NOT EXISTS grading_sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -51,12 +62,12 @@ CREATE TABLE IF NOT EXISTS grading_sessions (
     FOREIGN KEY (answer_key_id) REFERENCES answer_keys(id) ON DELETE CASCADE
 );
 
--- 5. Graded Sheets - Main results table
+-- 6. Graded Sheets - Main results table
 CREATE TABLE IF NOT EXISTS graded_sheets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL,
+    sheet_id INTEGER NOT NULL,              -- FK -> sheets(id) - the actual scanned sheet
     student_id TEXT,
-    image_path TEXT NOT NULL,
     score INTEGER NOT NULL,
     total_questions INTEGER NOT NULL,
     percentage REAL NOT NULL,
@@ -66,10 +77,11 @@ CREATE TABLE IF NOT EXISTS graded_sheets (
     graded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     threshold_used INTEGER DEFAULT 50,
     extraction_json TEXT,  -- Full extraction result as JSON
-    FOREIGN KEY (session_id) REFERENCES grading_sessions(id) ON DELETE CASCADE
+    FOREIGN KEY (session_id) REFERENCES grading_sessions(id) ON DELETE CASCADE,
+    FOREIGN KEY (sheet_id) REFERENCES sheets(id) ON DELETE CASCADE
 );
 
--- 6. Question Results - Detailed per-question results
+-- 7. Question Results - Detailed per-question results
 CREATE TABLE IF NOT EXISTS question_results (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     graded_sheet_id INTEGER NOT NULL,
@@ -82,17 +94,20 @@ CREATE TABLE IF NOT EXISTS question_results (
 );
 
 -- ============================================
--- INDEXES (for performance)
+-- INDEXES (for performance) - UPDATED
 -- ============================================
 
+CREATE INDEX IF NOT EXISTS idx_templates_name ON templates(name);
+CREATE INDEX IF NOT EXISTS idx_templates_sheet ON templates(sheet_id);
 CREATE INDEX IF NOT EXISTS idx_graded_sheets_session ON graded_sheets(session_id);
+CREATE INDEX IF NOT EXISTS idx_graded_sheets_sheet ON graded_sheets(sheet_id);
 CREATE INDEX IF NOT EXISTS idx_graded_sheets_student ON graded_sheets(student_id);
 CREATE INDEX IF NOT EXISTS idx_graded_sheets_date ON graded_sheets(graded_at);
 CREATE INDEX IF NOT EXISTS idx_question_results_sheet ON question_results(graded_sheet_id);
 CREATE INDEX IF NOT EXISTS idx_answer_keys_template ON answer_keys(template_id);
 
 -- ============================================
--- VIEWS (pre-built queries)
+-- VIEWS (updated for new relationships)
 -- ============================================
 
 -- Student Performance Summary
@@ -156,3 +171,15 @@ JOIN grading_sessions sess ON gs.session_id = sess.id
 JOIN templates t ON sess.template_id = t.id
 ORDER BY gs.graded_at DESC
 LIMIT 50;
+
+-- Sheet-Template relationship view
+CREATE VIEW IF NOT EXISTS sheet_templates AS
+SELECT 
+    s.id AS sheet_id,
+    s.image_path,
+    s.created_at AS sheet_created,
+    t.id AS template_id,
+    t.name AS template_name,
+    t.total_questions
+FROM sheets s
+LEFT JOIN templates t ON s.id = t.sheet_id;

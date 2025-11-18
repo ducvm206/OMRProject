@@ -1,4 +1,6 @@
 import os
+import sys
+import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from tkinter import Tk, Label, StringVar, IntVar, BooleanVar, NORMAL, DISABLED
 import tempfile
@@ -8,10 +10,23 @@ import io
 import threading
 import json
 import datetime
-from core.database import GradingDatabase
 
-# Get project root (directory containing this app.py file)
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+# Fix project root path
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+print(f"[DEBUG] Project root: {PROJECT_ROOT}")
+
+def get_parent_window():
+    """Get reference to parent window if launched from home screen"""
+    import tkinter as tk
+    parent = None
+    for widget in tk._default_root.winfo_children() if tk._default_root else []:
+        if isinstance(widget, tk.Tk) and "Answer Sheet Grading System" in widget.title():
+            parent = widget
+            break
+    return parent
 
 def to_relative_path(absolute_path):
     """Convert absolute path to relative path from project root"""
@@ -28,9 +43,8 @@ def select_file(title, filetypes, initial_dir=None):
     def open_dialog():
         root = Tk()
         root.withdraw()
-        root.attributes('-topmost', True)  # Bring to front
+        root.attributes('-topmost', True)
 
-        # Set default starting directory (fallback to current folder)
         start_dir = initial_dir or os.getcwd()
         file_path[0] = filedialog.askopenfilename(
             title=title,
@@ -41,22 +55,25 @@ def select_file(title, filetypes, initial_dir=None):
     
     thread = threading.Thread(target=open_dialog, daemon=True)
     thread.start()
-    thread.join()  # Wait for dialog to close
+    thread.join()
     
     if file_path[0]:
         return to_relative_path(file_path[0])
     return None
 
 def create_key(template_json=None):
-    import os
-    import tkinter as tk
-    from tkinter import ttk, messagebox, filedialog
-    import json
-    import datetime
-
+    """Main GUI for answer key creation with screen transitions"""
+    
+    # Initialize database
+    db = None
+    try:
+        from core.database import GradingDatabase
+        db = GradingDatabase()
+        print("[DB] Database initialized successfully")
+    except Exception as e:
+        print(f"[DB] Warning: Could not initialize database: {e}")
+    
     def main_gui():
-        """Main GUI for answer key creation with screen transitions"""
-        
         # Main window
         root = tk.Tk()
         root.title("Answer Key Creator")
@@ -100,7 +117,7 @@ def create_key(template_json=None):
         # Main container for screen transitions
         main_container = tk.Frame(root, bg=BG_COLOR)
         main_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
-        
+
         def load_template(file_path=None):
             """Load template from file"""
             nonlocal current_template, template_info, total_questions
@@ -189,7 +206,7 @@ def create_key(template_json=None):
             tk.Label(info_frame, textvariable=questions_var, 
                     font=("Segoe UI", 9), bg=CARD_COLOR).grid(row=1, column=1, sticky="w", pady=(5, 0))
             
-            ttk.Button(template_inner, text="📁 Load Template", 
+            ttk.Button(template_inner, text="📂 Load Template", 
                       command=lambda: load_template()).pack(anchor="w", pady=(15, 0))
             
             # Method selection card
@@ -210,7 +227,7 @@ def create_key(template_json=None):
             manual_frame = tk.Frame(methods_container, bg=CARD_COLOR)
             manual_frame.pack(fill=tk.X, pady=(0, 15))
             
-            manual_btn = ttk.Button(manual_frame, text="⌨️  Manual Entry", 
+            manual_btn = ttk.Button(manual_frame, text="⌨️ Manual Entry", 
                                    command=lambda: show_screen("manual_entry"),
                                    state=NORMAL if current_template else DISABLED,
                                    width=25)
@@ -224,7 +241,7 @@ def create_key(template_json=None):
             scan_frame = tk.Frame(methods_container, bg=CARD_COLOR)
             scan_frame.pack(fill=tk.X)
             
-            scan_btn = ttk.Button(scan_frame, text="📷  Scan Master Sheet", 
+            scan_btn = ttk.Button(scan_frame, text="📷 Scan Master Sheet", 
                                  command=lambda: show_screen("scan"),
                                  state=NORMAL if current_template else DISABLED,
                                  width=25)
@@ -248,8 +265,6 @@ def create_key(template_json=None):
         
         def create_manual_entry_screen():
             """Create the manual answer entry screen with multiple answer support"""
-            import tkinter as tk
-            
             frame = tk.Frame(main_container, bg=BG_COLOR)
             
             if not current_template or total_questions == 0:
@@ -370,7 +385,6 @@ def create_key(template_json=None):
                             else:
                                 # Parse multiple answers (A,C or A, C or AC)
                                 answer_list = []
-                                # Remove spaces and split by comma
                                 cleaned = answer_input.replace(" ", "")
                                 
                                 if "," in cleaned:
@@ -387,14 +401,9 @@ def create_key(template_json=None):
                                 
                                 if answer_list:
                                     # Valid answers found
-                                    # Remove duplicates and sort
                                     answer_list = sorted(list(set(answer_list)))
                                     answers[str(q_num)] = answer_list
                                     e.config(style="Valid.TEntry")
-                                    
-                                    # Auto-advance to next question
-                                    if q_num < total_questions and q_num < len(entries):
-                                        entries[q_num].focus()
                                 else:
                                     # Invalid input
                                     messagebox.showwarning("Invalid Input", 
@@ -412,8 +421,9 @@ def create_key(template_json=None):
                     
                     def make_enter_handler(q_num):
                         def on_enter_press(event):
-                            if q_num < total_questions and q_num < len(entries):
-                                entries[q_num].focus()
+                            if str(q_num) in answers:
+                                if q_num < total_questions and q_num < len(entries):
+                                    entries[q_num].focus()
                         return on_enter_press
                     
                     entry.bind('<KeyRelease>', make_answer_handler(question_num, entry))
@@ -483,6 +493,98 @@ def create_key(template_json=None):
                         
                         with open(filename, 'w', encoding='utf-8') as f:
                             json.dump(answer_key_data, f, indent=2, ensure_ascii=False)
+                        
+                        # Log to database - UPDATED FOR CORRECTED SCHEMA
+                        if db and current_template:
+                            try:
+                                # Convert absolute path to relative path for database lookup
+                                template_relative_path = to_relative_path(current_template)
+                                
+                                # First, we need to find the template_id from the template path
+                                template_info = db.get_template_by_json_path(template_relative_path)
+                                if template_info:
+                                    template_id = template_info['id']
+                                    
+                                    # Save answer key with proper template relationship
+                                    key_id = db.save_answer_key(
+                                        template_id=template_id,
+                                        name=f"Manual Key {datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                                        file_path=to_relative_path(filename),
+                                        created_by='manual'
+                                    )
+                                    
+                                    if key_id:
+                                        print(f"[DB] Answer key saved with template_id: {template_id}, key_id: {key_id}")
+                                    else:
+                                        print(f"[DB] Failed to save answer key")
+                                else:
+                                    print(f"[DB] Template not found in database: {template_relative_path}")
+                                    print(f"[DB] Available templates in database:")
+                                    
+                                    # Debug: List all templates in database
+                                    try:
+                                        cursor = db.conn.cursor()
+                                        cursor.execute("SELECT id, name, json_path FROM templates")
+                                        templates = cursor.fetchall()
+                                        for template in templates:
+                                            print(f"  - {template['json_path']} (ID: {template['id']})")
+                                    except Exception as debug_e:
+                                        print(f"[DB] Debug error: {debug_e}")
+                                    
+                                    # Try to create template record if not found
+                                    try:
+                                        print(f"[DB] Attempting to create template record...")
+                                        template_name = os.path.basename(current_template).replace('.json', '')
+                                        
+                                        # First create a sheet record
+                                        sheet_id = db.save_sheet(
+                                            image_path=f"templates/{template_name}.pdf",  # Placeholder
+                                            template_id=None,
+                                            num_questions=total_questions,
+                                            settings={'created_for_template': True}
+                                        )
+                                        
+                                        if sheet_id:
+                                            # Then create template record
+                                            template_id = db.save_template(
+                                                name=template_name,
+                                                json_path=template_relative_path,
+                                                sheet_id=sheet_id,
+                                                total_questions=total_questions,
+                                                has_student_id=True
+                                            )
+                                            
+                                            if template_id:
+                                                # Now save answer key with the new template
+                                                key_id = db.save_answer_key(
+                                                    template_id=template_id,
+                                                    name=f"Manual Key {datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                                                    file_path=to_relative_path(filename),
+                                                    created_by='manual'
+                                                )
+                                                print(f"[DB] Created template and saved answer key: template_id={template_id}, key_id={key_id}")
+                                            else:
+                                                print(f"[DB] Failed to create template record")
+                                        else:
+                                            print(f"[DB] Failed to create sheet record")
+                                            
+                                    except Exception as create_e:
+                                        print(f"[DB] Failed to create template: {create_e}")
+                                        
+                            except Exception as e:
+                                print(f"[DB] Failed to save answer key to database: {e}")
+                                # Try legacy method as fallback
+                                try:
+                                    if hasattr(db, 'log_answer_key_creation'):
+                                        db.log_answer_key_creation(
+                                            key_path=filename,
+                                            template_path=current_template,
+                                            num_questions=total_questions,
+                                            creation_method='manual'
+                                        )
+                                        print(f"[DB] Used legacy method to save answer key")
+                                except Exception as legacy_e:
+                                    print(f"[DB] Legacy method also failed: {legacy_e}")
                         
                         messagebox.showinfo("Success", f"Answer key saved!\n{os.path.basename(filename)}")
                         show_screen("main")

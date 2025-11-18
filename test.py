@@ -16,243 +16,24 @@ if PROJECT_ROOT not in sys.path:
 
 print(f"[DEBUG] Project root: {PROJECT_ROOT}")
 
+def get_parent_window():
+    """Get reference to parent window if launched from home screen"""
+    if not tk._default_root:
+        return None
+    
+    for widget in tk._default_root.winfo_children():
+        if isinstance(widget, tk.Tk):
+            title = widget.title()
+            if "Answer Sheet Grading System" in title:
+                return widget
+    return None
+
 def to_relative_path(absolute_path):
     """Convert absolute path to relative path from project root"""
     try:
         return os.path.relpath(absolute_path, PROJECT_ROOT)
     except ValueError:
         return absolute_path
-
-def save_sheet_to_db(db, image_path, is_template=False):
-    """Save a sheet to the database and return sheet_id"""
-    try:
-        rel_path = to_relative_path(image_path)
-        
-        # Check if sheet already exists
-        cursor = db.conn.execute(
-            "SELECT id FROM sheets WHERE image_path = ?",
-            (rel_path,)
-        )
-        existing = cursor.fetchone()
-        
-        if existing:
-            return existing[0]
-        
-        # Insert new sheet
-        cursor = db.conn.execute(
-            "INSERT INTO sheets (image_path, is_template) VALUES (?, ?)",
-            (rel_path, 1 if is_template else 0)
-        )
-        db.conn.commit()
-        return cursor.lastrowid
-        
-    except Exception as e:
-        print(f"[DB] Error saving sheet: {e}")
-        return None
-
-def ensure_template_in_db(db, template_json):
-    """Ensure template exists in database, return template_id"""
-    try:
-        rel_path = to_relative_path(template_json)
-        
-        # Try to find existing template
-        template_info = db.get_template_by_json_path(rel_path)
-        if template_info:
-            return template_info['id']
-        
-        # Template not in DB - we need to create it
-        # First, check if there's a sheet for this template
-        print(f"[DB] Template not found in database: {rel_path}")
-        print(f"[DB] Please ensure template is created via 'Create Template' first")
-        return None
-        
-    except Exception as e:
-        print(f"[DB] Error checking template: {e}")
-        return None
-
-def ensure_answer_key_in_db(db, answer_key_json, template_id):
-    """Ensure answer key exists in database, return answer_key_id"""
-    try:
-        rel_path = to_relative_path(answer_key_json)
-        
-        # Try to find existing answer key
-        answer_key_info = db.get_answer_key_by_file_path(rel_path)
-        if answer_key_info:
-            return answer_key_info['id']
-        
-        # Answer key not in DB - create it
-        with open(answer_key_json, 'r', encoding='utf-8') as f:
-            key_data = json.load(f)
-        
-        key_name = key_data.get('exam_name', os.path.basename(answer_key_json))
-        
-        cursor = db.conn.execute(
-            """INSERT INTO answer_keys (template_id, name, file_path, created_by)
-               VALUES (?, ?, ?, 'manual')""",
-            (template_id, key_name, rel_path)
-        )
-        db.conn.commit()
-        
-        print(f"[DB] Created answer key in database: {key_name}")
-        return cursor.lastrowid
-        
-    except Exception as e:
-        print(f"[DB] Error ensuring answer key: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
-
-def save_graded_sheet_to_db(db, session_id, image_path, student_id, 
-                            score, total_q, percentage, correct, wrong, blank,
-                            threshold, extraction_result):
-    """Save graded sheet with proper FK relationships"""
-    try:
-        # 1. Save the scanned sheet to sheets table
-        sheet_id = save_sheet_to_db(db, image_path, is_template=False)
-        if not sheet_id:
-            print(f"[DB] Failed to save sheet to database")
-            return None
-        
-        # 2. Ensure student exists in students table
-        if student_id and student_id != "N/A":
-            existing_student = db.get_student_by_id(student_id)
-            if not existing_student:
-                db.save_student(
-                    student_id=student_id,
-                    name=f"Student {student_id}",
-                    class_name="Unknown"
-                )
-                print(f"[DB] Created new student: {student_id}")
-        
-        # 3. Save graded sheet with sheet_id FK
-        cursor = db.conn.execute(
-            """INSERT INTO graded_sheets 
-               (session_id, sheet_id, student_id, score, total_questions, 
-                percentage, correct_count, wrong_count, blank_count, 
-                threshold_used, extraction_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (session_id, sheet_id, student_id, score, total_q, 
-             percentage, correct, wrong, blank, threshold, 
-             json.dumps(extraction_result))
-        )
-        db.conn.commit()
-        graded_sheet_id = cursor.lastrowid
-        
-        print(f"[DB] Saved graded sheet: id={graded_sheet_id}, sheet_id={sheet_id}")
-        return graded_sheet_id
-        
-    except Exception as e:
-        print(f"[DB] Error saving graded sheet: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
-
-def save_question_results_to_db(db, graded_sheet_id, grade_results, 
-                                extraction_result, correct_answers_dict):
-    """Save question results with fallback logic"""
-    try:
-        question_results_saved = 0
-        details = grade_results.get('details', [])
-        
-        # Try to save from details first
-        if details:
-            if isinstance(details, list):
-                for detail in details:
-                    if isinstance(detail, dict):
-                        q_num = detail.get('question_number')
-                        student_answer = detail.get('student_answer') or detail.get('student_answers', [])
-                        correct_answer = detail.get('correct_answer') or detail.get('correct_answers', [])
-                        is_correct = detail.get('is_correct', False)
-                        
-                        if isinstance(student_answer, list):
-                            student_answer_str = ','.join(sorted(str(a) for a in student_answer))
-                        else:
-                            student_answer_str = str(student_answer) if student_answer else ''
-                        
-                        if isinstance(correct_answer, list):
-                            correct_answer_str = ','.join(sorted(str(a) for a in correct_answer))
-                        else:
-                            correct_answer_str = str(correct_answer) if correct_answer else ''
-                        
-                        if q_num is not None:
-                            db.save_question_result(
-                                graded_sheet_id=graded_sheet_id,
-                                question_number=q_num,
-                                student_answer=student_answer_str,
-                                correct_answer=correct_answer_str,
-                                is_correct=is_correct
-                            )
-                            question_results_saved += 1
-            
-            elif isinstance(details, dict):
-                for q_num_str, detail_info in details.items():
-                    if isinstance(detail_info, dict):
-                        try:
-                            q_num = int(q_num_str)
-                            student_answer = detail_info.get('student_answer') or detail_info.get('student_answers', [])
-                            correct_answer = detail_info.get('correct_answer') or detail_info.get('correct_answers', [])
-                            is_correct = detail_info.get('is_correct', False)
-                            
-                            if isinstance(student_answer, list):
-                                student_answer_str = ','.join(sorted(str(a) for a in student_answer))
-                            else:
-                                student_answer_str = str(student_answer) if student_answer else ''
-                            
-                            if isinstance(correct_answer, list):
-                                correct_answer_str = ','.join(sorted(str(a) for a in correct_answer))
-                            else:
-                                correct_answer_str = str(correct_answer) if correct_answer else ''
-                            
-                            db.save_question_result(
-                                graded_sheet_id=graded_sheet_id,
-                                question_number=q_num,
-                                student_answer=student_answer_str,
-                                correct_answer=correct_answer_str,
-                                is_correct=is_correct
-                            )
-                            question_results_saved += 1
-                        except Exception as e:
-                            print(f"[DB] Error saving question {q_num_str}: {e}")
-                            continue
-        
-        # Fallback: Generate from extraction data if no details were saved
-        if question_results_saved == 0:
-            print(f"[DB] No details found, generating from extraction data...")
-            
-            answers_data = extraction_result.get('answers', {})
-            
-            for q_num_str, q_data in answers_data.items():
-                try:
-                    q_num = int(q_num_str)
-                    student_answers = q_data.get('selected_answers', [])
-                    correct_answers = correct_answers_dict.get(q_num_str, [])
-                    
-                    student_answer_str = ','.join(sorted(student_answers)) if student_answers else ''
-                    correct_answer_str = ','.join(sorted(str(a) for a in correct_answers)) if correct_answers else ''
-                    
-                    is_correct = (student_answer_str == correct_answer_str)
-                    
-                    db.save_question_result(
-                        graded_sheet_id=graded_sheet_id,
-                        question_number=q_num,
-                        student_answer=student_answer_str,
-                        correct_answer=correct_answer_str,
-                        is_correct=is_correct
-                    )
-                    question_results_saved += 1
-                    
-                except Exception as e:
-                    print(f"[DB] Error saving question {q_num_str}: {e}")
-                    continue
-        
-        print(f"[DB] Saved {question_results_saved} question results")
-        return question_results_saved
-        
-    except Exception as e:
-        print(f"[DB] Error saving question results: {e}")
-        import traceback
-        traceback.print_exc()
-        return 0
 
 def grade_sheet_gui(template_json=None, key_json=None):
     """Main GUI for grading answer sheets with database integration"""
@@ -481,6 +262,24 @@ def grade_sheet_gui(template_json=None, key_json=None):
     next_btn = ttk.Button(nav_frame, text="Next →", command=next_sheet, width=8)
     next_btn.pack(side=tk.LEFT, padx=2)
     
+    # Footer with back button
+    footer_frame = tk.Frame(left_content, bg=BG_COLOR)
+    footer_frame.pack(fill=tk.X, side=tk.BOTTOM, pady=(10, 0))
+    
+    # Back to main menu button
+    def back_to_menu():
+        parent = get_parent_window()
+        cleanup_temp_files()  # Clean up temp overlay files
+        if parent:
+            root.destroy()
+            parent.deiconify()
+        else:
+            if messagebox.askyesno("Exit", "Close Grading System?"):
+                root.destroy()
+    
+    ttk.Button(footer_frame, text="⬅ Main Menu", 
+              command=back_to_menu).pack(side=tk.LEFT)
+    
     # === RIGHT PANEL CONTENT ===
     right_content = tk.Frame(right_panel, bg=BG_COLOR)
     right_content.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -496,12 +295,160 @@ def grade_sheet_gui(template_json=None, key_json=None):
     canvas.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
     
     canvas_image = {"img": None}
+
+    def display_image_with_overlay(image_path, grade_data):
+        """Create and display overlay image with colored bubbles"""
+        try:
+            # Read image
+            img = cv2.imread(image_path)
+            if img is None:
+                raise Exception("Failed to load image")
+            
+            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            height, width = img_rgb.shape[:2]
+            
+            # Get extraction result
+            extraction = grade_data.get('extraction_result', {})
+            answers_data = extraction.get('answers', {})
+            
+            # Load answer key
+            with open(current_key, 'r', encoding='utf-8') as f:
+                key_data = json.load(f)
+            correct_answers = key_data.get('answer_key', {})
+            
+            # Get grade results
+            grade_results = grade_data.get('grade_results', {})
+            details = grade_results.get('details', [])
+            
+            # Create correctness map
+            correctness_map = {}
+            if isinstance(details, list):
+                for detail in details:
+                    if isinstance(detail, dict):
+                        q_num = str(detail.get('question_number'))
+                        is_correct = detail.get('is_correct', False)
+                        if not is_correct and 'status' in detail:
+                            is_correct = detail.get('status') == 'correct'
+                        correctness_map[q_num] = is_correct
+            elif isinstance(details, dict):
+                for q_num, detail_info in details.items():
+                    if isinstance(detail_info, dict):
+                        is_correct = detail_info.get('is_correct', False)
+                        if not is_correct and 'status' in detail_info:
+                            is_correct = detail_info.get('status') == 'correct'
+                        correctness_map[str(q_num)] = is_correct
+            
+            # Load template
+            from core.extraction import BubbleTemplate
+            template = BubbleTemplate(current_template)
+            
+            # Calculate scale factors
+            template_width = template.template_width
+            template_height = template.template_height
+            scale_x = width / template_width
+            scale_y = height / template_height
+            scale_avg = (scale_x + scale_y) / 2
+            
+            # Draw answer bubbles
+            for question in template.questions:
+                q_num = str(question.question_number)
+                is_correct = correctness_map.get(q_num, False)
+                q_data = answers_data.get(q_num, {})
+                selected = q_data.get('selected_answers', [])
+                
+                for bubble in question.bubbles:
+                    if bubble.label in selected:
+                        color = (0, 255, 0) if is_correct else (255, 0, 0)
+                        x = int(bubble.x * scale_x)
+                        y = int(bubble.y * scale_y)
+                        radius = int(bubble.radius * scale_avg)
+                        cv2.circle(img_rgb, (x, y), radius, color, 3)
+            
+            # Draw student ID bubbles
+            student_id_data = extraction.get('student_id', {})
+            if student_id_data and isinstance(student_id_data, dict):
+                digit_details = student_id_data.get('digit_details', [])
+                
+                if template.id_template:
+                    selected_positions = {d['position']: d['digit'] for d in digit_details if d.get('digit') is not None}
+                    
+                    for column in template.id_template['digit_columns']:
+                        pos = column['digit_position']
+                        selected_digit = selected_positions.get(pos)
+                        
+                        for bubble in column['bubbles']:
+                            x = int(bubble['x'] * scale_x)
+                            y = int(bubble['y'] * scale_y)
+                            radius = int(bubble['radius'] * scale_avg)
+                            digit = bubble['digit']
+                            
+                            if digit == selected_digit:
+                                cv2.circle(img_rgb, (x, y), radius, (255, 0, 255), 3)
+            
+            # Convert to PIL Image
+            pil_img = Image.fromarray(img_rgb)
+            
+            # Save to temporary file
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
+            pil_img.save(temp_file.name)
+            temp_file.close()
+            temp_overlay_files.append(temp_file.name)
+            
+            # Display in canvas
+            display_image_on_canvas(temp_file.name)
+            
+        except Exception as e:
+            print(f"[ERROR] Error creating overlay: {e}")
+            import traceback
+            traceback.print_exc()
+            try:
+                display_image_on_canvas(image_path)
+            except Exception as e2:
+                print(f"[ERROR] Fallback also failed: {e2}")
+                canvas.delete("all")
+                canvas.create_text(400, 300, 
+                                 text=f"Error displaying image:\n{str(e)[:50]}",
+                                 font=("Segoe UI", 10), fill="red", justify=tk.CENTER)
     
-    # [Display functions remain the same - display_image_with_overlay, display_image_on_canvas]
-    # ... (keeping these unchanged for brevity - include full original code)
+    def display_image_on_canvas(image_path):
+        """Display image on canvas"""
+        try:
+            img = Image.open(image_path)
+            
+            canvas.update_idletasks()
+            canvas_width = canvas.winfo_width()
+            canvas_height = canvas.winfo_height()
+            
+            if canvas_width < 10:
+                canvas_width = 600
+                canvas_height = 800
+            
+            # Scale image
+            img_width, img_height = img.size
+            scale_x = (canvas_width - 40) / img_width
+            scale_y = (canvas_height - 40) / img_height
+            scale = min(scale_x, scale_y, 1.0)
+            
+            new_width = int(img_width * scale)
+            new_height = int(img_height * scale)
+            
+            img_resized = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            canvas_image["img"] = ImageTk.PhotoImage(img_resized)
+            
+            # Display
+            canvas.delete("all")
+            x = canvas_width // 2
+            y = canvas_height // 2
+            canvas.create_image(x, y, image=canvas_image["img"])
+            
+        except Exception as e:
+            print(f"Error displaying image: {e}")
+            canvas.delete("all")
+            canvas.create_text(300, 400, text="Error loading image",
+                             font=("Segoe UI", 12), fill="red")
     
     def grade_single_sheet():
-        """Grade a single answer sheet with fixed database integration"""
+        """Grade a single answer sheet"""
         image_path = filedialog.askopenfilename(
             title="Select Filled Answer Sheet",
             filetypes=[("Image files", "*.png *.jpg *.jpeg *.bmp *.tiff"), ("All files", "*.*")],
@@ -556,7 +503,7 @@ def grade_sheet_gui(template_json=None, key_json=None):
                 student_id = sid.get('student_id', 'N/A')
             elif isinstance(sid, str):
                 student_id = sid
-
+            
             # Extract grade data
             try:
                 total_q = grade_results.get('total_questions', 0)
@@ -573,11 +520,6 @@ def grade_sheet_gui(template_json=None, key_json=None):
                     blank = summary.get('blank', blank)
                     percentage = summary.get('percentage', percentage)
                 
-                # Calculate wrong count if it's 0
-                if wrong == 0 and total_q > 0:
-                    wrong = total_q - correct - blank
-                    wrong = max(0, wrong)
-                
                 if total_q == 0:
                     total_q = correct + wrong + blank
                 if percentage == 0.0 and total_q > 0:
@@ -588,7 +530,7 @@ def grade_sheet_gui(template_json=None, key_json=None):
                 messagebox.showerror("Error", f"Failed to parse grading results: {e}")
                 return
             
-            # Display results (keeping original display code)
+            # Display results
             results_text.config(state=tk.NORMAL)
             results_text.delete("1.0", tk.END)
             
@@ -615,6 +557,51 @@ def grade_sheet_gui(template_json=None, key_json=None):
             results_text.insert(tk.END, f"○ Blank: ", "label")
             results_text.insert(tk.END, f"{blank}\n\n", "blank")
             
+            # Show wrong answers
+            details = grade_results.get('details', [])
+            wrong_questions = []
+            
+            if isinstance(details, list):
+                for detail in details:
+                    if isinstance(detail, dict):
+                        is_correct = detail.get('is_correct', True)
+                        if not is_correct and 'status' in detail:
+                            is_correct = detail.get('status') == 'correct'
+                        if not is_correct:
+                            wrong_questions.append(detail)
+            elif isinstance(details, dict):
+                for q_num, detail_info in details.items():
+                    if isinstance(detail_info, dict):
+                        is_correct = detail_info.get('is_correct', True)
+                        if not is_correct and 'status' in detail_info:
+                            is_correct = detail_info.get('status') == 'correct'
+                        if not is_correct:
+                            detail_copy = detail_info.copy()
+                            detail_copy['question_number'] = q_num
+                            wrong_questions.append(detail_copy)
+            
+            if wrong_questions:
+                results_text.insert(tk.END, "Wrong Answers:\n", "label")
+                for detail in wrong_questions[:10]:
+                    q_num = detail.get('question_number', '?')
+                    student_ans = detail.get('student_answer') or detail.get('student_answers', [])
+                    correct_ans = detail.get('correct_answer') or detail.get('correct_answers', [])
+                    
+                    if isinstance(student_ans, list):
+                        student_ans_str = ', '.join(str(a) for a in student_ans) if student_ans else 'Blank'
+                    else:
+                        student_ans_str = str(student_ans) if student_ans else 'Blank'
+                    
+                    if isinstance(correct_ans, list):
+                        correct_ans_str = ', '.join(str(a) for a in correct_ans) if correct_ans else '?'
+                    else:
+                        correct_ans_str = str(correct_ans) if correct_ans else '?'
+                    
+                    results_text.insert(tk.END, f"  Q{q_num}: {student_ans_str} → {correct_ans_str}\n", "wrong")
+                
+                if len(wrong_questions) > 10:
+                    results_text.insert(tk.END, f"  ... and {len(wrong_questions) - 10} more\n", "wrong")
+            
             # Configure tags
             results_text.tag_config("header", font=("Courier New", 9, "bold"))
             results_text.tag_config("label", font=("Courier New", 9, "bold"))
@@ -629,66 +616,85 @@ def grade_sheet_gui(template_json=None, key_json=None):
             # Hide navigation
             nav_frame.pack_forget()
             
-            # FIXED DATABASE SAVE
+            # Display overlay image
+            grade_data = {
+                'extraction_result': result,
+                'grade_results': grade_results
+            }
+            display_image_with_overlay(image_path, grade_data)
+            
+            # Log to database
             if db:
                 try:
-                    # Ensure template exists in database
-                    template_id = ensure_template_in_db(db, current_template)
-                    if not template_id:
-                        print(f"[DB] Warning: Template not in database, skipping DB save")
-                        return
+                    template_info = db.get_template_by_json_path(current_template)
+                    answer_key_info = db.get_answer_key_by_file_path(current_key)
                     
-                    # Ensure answer key exists in database
-                    answer_key_id = ensure_answer_key_in_db(db, current_key, template_id)
-                    if not answer_key_id:
-                        print(f"[DB] Warning: Could not create/find answer key in database")
-                        return
-                    
-                    # Create grading session
-                    session_id = db.create_grading_session(
-                        name=f"Single Grade {datetime.datetime.now().strftime('%H:%M:%S')}",
-                        template_id=template_id,
-                        answer_key_id=answer_key_id,
-                        is_batch=False,
-                        total_sheets=1
-                    )
-                    
-                    if session_id:
-                        # Save graded sheet with proper FKs
-                        graded_sheet_id = save_graded_sheet_to_db(
-                            db, session_id, image_path, student_id,
-                            correct, total_q, percentage, correct, wrong, blank,
-                            threshold_var.get(), result
+                    if template_info and answer_key_info:
+                        template_id = template_info['id']
+                        answer_key_id = answer_key_info['id']
+                        
+                        session_id = db.create_grading_session(
+                            name=f"Single Grade {datetime.datetime.now().strftime('%H:%M:%S')}",
+                            template_id=template_id,
+                            answer_key_id=answer_key_id,
+                            is_batch=False,
+                            total_sheets=1
                         )
                         
-                        # Save question results
-                        if graded_sheet_id:
-                            with open(current_key, 'r', encoding='utf-8') as f:
-                                key_data = json.load(f)
-                            correct_answers_dict = key_data.get('answer_key', {})
-                            
-                            save_question_results_to_db(
-                                db, graded_sheet_id, grade_results, result, correct_answers_dict
-                            )
-                            
-                            print(f"[DB] Grading session saved: session_id={session_id}, graded_sheet_id={graded_sheet_id}")
-                        else:
-                            print(f"[DB] Failed to save graded sheet")
-                    else:
-                        print(f"[DB] Failed to create grading session")
+                        graded_sheet_id = db.save_graded_sheet(
+                            session_id=session_id,
+                            sheet_image_path=image_path,
+                            student_id=student_id,
+                            score=correct,
+                            total_questions=total_q,
+                            percentage=percentage,
+                            correct_count=correct,
+                            wrong_count=wrong,
+                            blank_count=blank,
+                            threshold_used=threshold_var.get(),
+                            extraction_json=json.dumps(result)
+                        )
                         
+                        if graded_sheet_id and details:
+                            for detail in details:
+                                if isinstance(detail, dict):
+                                    q_num = detail.get('question_number')
+                                    student_answer = detail.get('student_answer') or detail.get('student_answers', [])
+                                    correct_answer = detail.get('correct_answer') or detail.get('correct_answers', [])
+                                    is_correct = detail.get('is_correct', False)
+                                    
+                                    if isinstance(student_answer, list):
+                                        student_answer_str = ','.join(str(a) for a in student_answer)
+                                    else:
+                                        student_answer_str = str(student_answer)
+                                    
+                                    if isinstance(correct_answer, list):
+                                        correct_answer_str = ','.join(str(a) for a in correct_answer)
+                                    else:
+                                        correct_answer_str = str(correct_answer)
+                                    
+                                    db.save_question_result(
+                                        graded_sheet_id=graded_sheet_id,
+                                        question_number=q_num,
+                                        student_answer=student_answer_str,
+                                        correct_answer=correct_answer_str,
+                                        is_correct=is_correct
+                                    )
+                        
+                        print(f"[DB] Grading session saved: session_id={session_id}, graded_sheet_id={graded_sheet_id}")
+                    else:
+                        print(f"[DB] Could not find template or answer key in database")
+                            
                 except Exception as e:
                     print(f"[DB] Failed to log grading session: {e}")
-                    import traceback
-                    traceback.print_exc()
             
         except Exception as e:
             import traceback
             traceback.print_exc()
             messagebox.showerror("Error", f"Grading failed:\n{str(e)}")
-    
+        
     def grade_batch_sheets():
-        """Grade batch of answer sheets with fixed database integration"""
+        """Grade batch of answer sheets"""
         nonlocal batch_results, current_batch_index
         
         folder_path = filedialog.askdirectory(
@@ -724,39 +730,6 @@ def grade_sheet_gui(template_json=None, key_json=None):
             # Process each sheet
             batch_results = []
             
-            # FIXED: Create batch session with proper database checks
-            batch_session_id = None
-            db_enabled = db is not None
-            
-            if db_enabled:
-                try:
-                    template_id = ensure_template_in_db(db, current_template)
-                    if not template_id:
-                        print(f"[DB] Warning: Template not in database, skipping DB save")
-                        db_enabled = False
-                    else:
-                        answer_key_id = ensure_answer_key_in_db(db, current_key, template_id)
-                        if not answer_key_id:
-                            print(f"[DB] Warning: Could not create answer key, skipping DB save")
-                            db_enabled = False
-                        else:
-                            batch_session_id = db.create_grading_session(
-                                name=f"Batch Grade {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                                template_id=template_id,
-                                answer_key_id=answer_key_id,
-                                is_batch=True,
-                                total_sheets=len(image_files)
-                            )
-                            print(f"[DB] Created batch session: {batch_session_id}")
-                except Exception as e:
-                    print(f"[DB] Failed to create batch session: {e}")
-                    db_enabled = False
-            
-            # Load answer key once for all sheets
-            with open(current_key, 'r', encoding='utf-8') as f:
-                key_data = json.load(f)
-            correct_answers_dict = key_data.get('answer_key', {})
-            
             for i, img_path in enumerate(image_files):
                 try:
                     # Update progress
@@ -773,7 +746,6 @@ def grade_sheet_gui(template_json=None, key_json=None):
                     result = extractor.extract_complete(img_path, threshold_percent=threshold_var.get(), debug=False)
                     
                     if result:
-                        # Grade
                         answer_key_data = load_answer_key(current_key)
                         scanned_answers_data = {
                             'metadata': result.get('metadata', {}),
@@ -788,7 +760,7 @@ def grade_sheet_gui(template_json=None, key_json=None):
                             student_id = sid.get('student_id', 'N/A')
                         elif isinstance(sid, str):
                             student_id = sid
-
+                        
                         # Extract grade data
                         total_q = grade_results.get('total_questions', 0)
                         correct = grade_results.get('correct', 0)
@@ -803,10 +775,6 @@ def grade_sheet_gui(template_json=None, key_json=None):
                             wrong = summary.get('wrong', wrong)
                             blank = summary.get('blank', blank)
                             percentage = summary.get('percentage', percentage)
-                        
-                        if wrong == 0 and total_q > 0:
-                            wrong = total_q - correct - blank
-                            wrong = max(0, wrong)
                         
                         if total_q == 0:
                             total_q = correct + wrong + blank
@@ -826,25 +794,47 @@ def grade_sheet_gui(template_json=None, key_json=None):
                             'blank': blank
                         })
                         
-                        # FIXED: Save to database using batch session
-                        if db_enabled and batch_session_id:
+                        # Log to database
+                        if db:
                             try:
-                                graded_sheet_id = save_graded_sheet_to_db(
-                                    db, batch_session_id, img_path, student_id,
-                                    correct, total_q, percentage, correct, wrong, blank,
-                                    threshold_var.get(), result
-                                )
+                                template_info = db.get_template_by_json_path(to_relative_path(current_template))
+                                answer_key_info = db.get_answer_key_by_file_path(to_relative_path(current_key))
                                 
-                                if graded_sheet_id:
-                                    save_question_results_to_db(
-                                        db, graded_sheet_id, grade_results, result, correct_answers_dict
+                                if template_info and answer_key_info:
+                                    template_id = template_info['id']
+                                    answer_key_id = answer_key_info['id']
+                                    
+                                    session_id = db.create_grading_session(
+                                        name=f"Batch Sheet {i+1} - {datetime.datetime.now().strftime('%H:%M:%S')}",
+                                        template_id=template_id,
+                                        answer_key_id=answer_key_id,
+                                        is_batch=True,
+                                        total_sheets=len(image_files)
                                     )
-                                    print(f"[DB] Batch sheet {i+1} saved: graded_sheet_id={graded_sheet_id}")
+                                    
+                                    if session_id:
+                                        graded_sheet_id = db.save_graded_sheet(
+                                            session_id=session_id,
+                                            sheet_image_path=img_path,
+                                            student_id=student_id,
+                                            score=correct,
+                                            total_questions=total_q,
+                                            percentage=percentage,
+                                            correct_count=correct,
+                                            wrong_count=wrong,
+                                            blank_count=blank,
+                                            threshold_used=threshold_var.get(),
+                                            extraction_json=json.dumps(result)
+                                        )
+                                        
+                                        print(f"[DB] Batch sheet {i+1} saved: session_id={session_id}, graded_sheet_id={graded_sheet_id}")
+                                    else:
+                                        print(f"[DB] Failed to create session for batch sheet {i+1}")
+                                else:
+                                    print(f"[DB] Could not find template or answer key for batch sheet {i+1}")
                                     
                             except Exception as e:
                                 print(f"[DB] Failed to log batch sheet {i+1}: {e}")
-                                import traceback
-                                traceback.print_exc()
                         
                         # Update progress
                         results_text.config(state=tk.NORMAL)
@@ -905,7 +895,7 @@ def grade_sheet_gui(template_json=None, key_json=None):
         prev_btn.config(state=NORMAL if index > 0 else DISABLED)
         next_btn.config(state=NORMAL if index < len(batch_results) - 1 else DISABLED)
         
-        # Display results (keeping original display code)
+        # Display results
         results_text.config(state=tk.NORMAL)
         results_text.delete("1.0", tk.END)
         
@@ -916,11 +906,29 @@ def grade_sheet_gui(template_json=None, key_json=None):
         results_text.insert(tk.END, f"Student ID: ", "label")
         results_text.insert(tk.END, f"{student_id}\n\n", "value")
         
-        total_q = item['total_questions']
-        correct = item['correct']
-        wrong = item['wrong']
-        blank = item['blank']
-        percentage = item['percentage']
+        # Handle grade results
+        try:
+            total_q = grade_results.get('total_questions', 0)
+            correct = grade_results.get('correct', 0)
+            wrong = grade_results.get('wrong', 0)
+            blank = grade_results.get('blank', 0)
+            percentage = grade_results.get('percentage', 0.0)
+            
+            if 'summary' in grade_results and isinstance(grade_results.get('summary'), dict):
+                summary = grade_results['summary']
+                total_q = summary.get('total_questions', total_q)
+                correct = summary.get('correct', correct)
+                wrong = summary.get('wrong', wrong)
+                blank = summary.get('blank', blank)
+                percentage = summary.get('percentage', percentage)
+            
+            if total_q == 0:
+                total_q = correct + wrong + blank
+            if percentage == 0.0 and total_q > 0:
+                percentage = (correct / total_q) * 100
+        except Exception as e:
+            print(f"[ERROR] Failed to extract grade data for batch item: {e}")
+            return
         
         results_text.insert(tk.END, f"Score: ", "label")
         score_text = f"{correct}/{total_q}"
@@ -994,145 +1002,8 @@ def grade_sheet_gui(template_json=None, key_json=None):
         
         results_text.config(state=tk.DISABLED)
         
-        # FIXED: Display overlay image in right panel
+        # Display overlay image
         display_image_with_overlay(item['image_path'], item)
-    
-    def display_image_with_overlay(image_path, grade_data):
-        """Create and display overlay image with colored bubbles"""
-        try:
-            img = cv2.imread(image_path)
-            if img is None:
-                raise Exception("Failed to load image")
-            
-            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            height, width = img_rgb.shape[:2]
-            
-            extraction = grade_data.get('extraction_result', {})
-            answers_data = extraction.get('answers', {})
-            
-            with open(current_key, 'r', encoding='utf-8') as f:
-                key_data = json.load(f)
-            correct_answers = key_data.get('answer_key', {})
-            
-            grade_results = grade_data.get('grade_results', {})
-            details = grade_results.get('details', [])
-            
-            correctness_map = {}
-            if isinstance(details, list):
-                for detail in details:
-                    if isinstance(detail, dict):
-                        q_num = str(detail.get('question_number'))
-                        is_correct = detail.get('is_correct', False)
-                        if not is_correct and 'status' in detail:
-                            is_correct = detail.get('status') == 'correct'
-                        correctness_map[q_num] = is_correct
-            elif isinstance(details, dict):
-                for q_num, detail_info in details.items():
-                    if isinstance(detail_info, dict):
-                        is_correct = detail_info.get('is_correct', False)
-                        if not is_correct and 'status' in detail_info:
-                            is_correct = detail_info.get('status') == 'correct'
-                        correctness_map[str(q_num)] = is_correct
-            
-            from core.extraction import BubbleTemplate
-            template = BubbleTemplate(current_template)
-            
-            template_width = template.template_width
-            template_height = template.template_height
-            scale_x = width / template_width
-            scale_y = height / template_height
-            scale_avg = (scale_x + scale_y) / 2
-            
-            for question in template.questions:
-                q_num = str(question.question_number)
-                is_correct = correctness_map.get(q_num, False)
-                q_data = answers_data.get(q_num, {})
-                selected = q_data.get('selected_answers', [])
-                
-                for bubble in question.bubbles:
-                    if bubble.label in selected:
-                        color = (0, 255, 0) if is_correct else (255, 0, 0)
-                        x = int(bubble.x * scale_x)
-                        y = int(bubble.y * scale_y)
-                        radius = int(bubble.radius * scale_avg)
-                        cv2.circle(img_rgb, (x, y), radius, color, 3)
-            
-            student_id_data = extraction.get('student_id', {})
-            if student_id_data and isinstance(student_id_data, dict):
-                digit_details = student_id_data.get('digit_details', [])
-                
-                if template.id_template:
-                    selected_positions = {d['position']: d['digit'] for d in digit_details if d.get('digit') is not None}
-                    
-                    for column in template.id_template['digit_columns']:
-                        pos = column['digit_position']
-                        selected_digit = selected_positions.get(pos)
-                        
-                        for bubble in column['bubbles']:
-                            x = int(bubble['x'] * scale_x)
-                            y = int(bubble['y'] * scale_y)
-                            radius = int(bubble['radius'] * scale_avg)
-                            digit = bubble['digit']
-                            
-                            if digit == selected_digit:
-                                cv2.circle(img_rgb, (x, y), radius, (255, 0, 255), 3)
-            
-            pil_img = Image.fromarray(img_rgb)
-            
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
-            pil_img.save(temp_file.name)
-            temp_file.close()
-            temp_overlay_files.append(temp_file.name)
-            
-            display_image_on_canvas(temp_file.name)
-            
-        except Exception as e:
-            print(f"[ERROR] Error creating overlay: {e}")
-            import traceback
-            traceback.print_exc()
-            try:
-                display_image_on_canvas(image_path)
-            except Exception as e2:
-                print(f"[ERROR] Fallback also failed: {e2}")
-                canvas.delete("all")
-                canvas.create_text(400, 300, 
-                                 text=f"Error displaying image:\n{str(e)[:50]}",
-                                 font=("Segoe UI", 10), fill="red", justify=tk.CENTER)
-    
-    def display_image_on_canvas(image_path):
-        """Display image on canvas"""
-        try:
-            img = Image.open(image_path)
-            
-            canvas.update_idletasks()
-            canvas_width = canvas.winfo_width()
-            canvas_height = canvas.winfo_height()
-            
-            if canvas_width < 10:
-                canvas_width = 600
-                canvas_height = 800
-            
-            img_width, img_height = img.size
-            scale_x = (canvas_width - 40) / img_width
-            scale_y = (canvas_height - 40) / img_height
-            scale = min(scale_x, scale_y, 1.0)
-            
-            new_width = int(img_width * scale)
-            new_height = int(img_height * scale)
-            
-            img_resized = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-            canvas_image["img"] = ImageTk.PhotoImage(img_resized)
-            
-            canvas.delete("all")
-            x = canvas_width // 2
-            y = canvas_height // 2
-            canvas.create_image(x, y, image=canvas_image["img"])
-            
-        except Exception as e:
-            print(f"Error displaying image: {e}")
-            canvas.delete("all")
-            canvas.create_text(300, 400, text="Error loading image",
-                             font=("Segoe UI", 12), fill="red")
     
     def cleanup_temp_files():
         """Clean up temporary overlay files"""
@@ -1149,8 +1020,10 @@ def grade_sheet_gui(template_json=None, key_json=None):
         cleanup_temp_files()
         root.destroy()
     
+    # Set close handler
     root.protocol("WM_DELETE_WINDOW", on_closing)
     
+    # Show placeholder in canvas
     canvas.create_text(400, 300, 
                       text="Answer sheet preview will\nappear here after grading",
                       font=("Segoe UI", 12), fill="gray", justify=tk.CENTER)

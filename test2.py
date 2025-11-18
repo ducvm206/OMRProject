@@ -18,6 +18,18 @@ if PROJECT_ROOT not in sys.path:
 print(f"[DEBUG] Project root: {PROJECT_ROOT}")
 print(f"[DEBUG] sys.path: {sys.path[:3]}")
 
+def get_parent_window():
+    """Get reference to parent window if launched from home screen"""
+    if not tk._default_root:
+        return None
+    
+    for widget in tk._default_root.winfo_children():
+        if isinstance(widget, tk.Tk):
+            title = widget.title()
+            if "Answer Sheet Grading System" in title:
+                return widget
+    return None
+
 def create_integrated_gui():
     """Integrated GUI for sheet generation and template extraction with DB support"""
     
@@ -120,18 +132,6 @@ def create_integrated_gui():
                     
                 except Exception as e:
                     print(f"[DB] Failed to save sheet: {e}")
-                    # Try alternative method if available
-                    try:
-                        if hasattr(db, 'insert_sheet'):
-                            sheet_data = {
-                                'image_path': output_path,
-                                'is_template': True,  # This is a template sheet
-                                'notes': f"Generated sheet with {num_questions} questions"
-                            }
-                            db.insert_sheet(sheet_data)
-                            print("[DB] Sheet saved using alternative method")
-                    except Exception as alt_e:
-                        print(f"[DB] Alternative save also failed: {alt_e}")
             
             messagebox.showinfo("Success", 
                 f"Answer sheet created successfully!\n\n"
@@ -248,119 +248,6 @@ def create_integrated_gui():
             progress_bar.stop()
             messagebox.showerror("Error", f"Failed to extract template: {e}")
             status_var.set("Error during extraction")
-    
-    def show_detection_visualization(pdf_path, json_path):
-        """Show PDF with detected bubbles overlaid"""
-        nonlocal current_preview_image
-        
-        try:
-            # Load template JSON
-            with open(json_path, 'r') as f:
-                template_data = json.load(f)
-            
-            # Get page 1 data
-            page_data = template_data.get('page_1', {})
-            
-            # Get original image dimensions from template
-            img_dims = page_data.get('image_dimensions', {})
-            original_width = img_dims.get('width', 1)
-            original_height = img_dims.get('height', 1)
-            
-            print(f"[DEBUG] Original dimensions: {original_width}x{original_height}")
-            
-            # Convert PDF to image
-            pdf_image = convert_pdf_to_image(pdf_path, page_number=0)
-            if not pdf_image:
-                show_preview_error("Could not generate preview")
-                return
-            
-            # Get actual image size
-            actual_width, actual_height = pdf_image.size
-            print(f"[DEBUG] Preview dimensions: {actual_width}x{actual_height}")
-            
-            # Calculate scale factors
-            scale_x = actual_width / original_width
-            scale_y = actual_height / original_height
-            print(f"[DEBUG] Scale factors: {scale_x:.3f} x {scale_y:.3f}")
-            
-            # Draw detections on image
-            draw = ImageDraw.Draw(pdf_image)
-            
-            # Draw Student ID region
-            id_data = page_data.get('student_id')
-            if id_data and id_data.get('digit_columns'):
-                all_bubbles = []
-                for col in id_data['digit_columns']:
-                    all_bubbles.extend(col['bubbles'])
-                
-                if all_bubbles:
-                    xs = [b['x'] * scale_x for b in all_bubbles]
-                    ys = [b['y'] * scale_y for b in all_bubbles]
-                    x_min, x_max = min(xs), max(xs)
-                    y_min, y_max = min(ys), max(ys)
-                    
-                    # Draw ID region rectangle
-                    padding = 30 * scale_x
-                    draw.rectangle(
-                        [(x_min - padding, y_min - padding), 
-                         (x_max + padding, y_max + padding)],
-                        outline='cyan', width=int(4 * scale_x)
-                    )
-                    
-                    # Draw ID bubbles
-                    for col in id_data['digit_columns']:
-                        for bubble in col['bubbles']:
-                            x = bubble['x'] * scale_x
-                            y = bubble['y'] * scale_y
-                            r = bubble['radius'] * scale_x
-                            draw.ellipse(
-                                [(x - r, y - r), (x + r, y + r)],
-                                outline='magenta', width=max(2, int(2 * scale_x))
-                            )
-                    
-                    print(f"[DEBUG] Drew ID region and {len(all_bubbles)} ID bubbles")
-            
-            # Draw question bubbles
-            questions = page_data.get('questions', [])
-            print(f"[DEBUG] Drawing {len(questions)} questions")
-            
-            for q in questions:
-                bbox = q['bounding_box']
-                
-                # Scale coordinates
-                x_min = bbox['x_min'] * scale_x
-                x_max = bbox['x_max'] * scale_x
-                y_min = bbox['y_min'] * scale_y
-                y_max = bbox['y_max'] * scale_y
-                
-                # Draw question bounding box
-                padding = 10 * scale_x
-                draw.rectangle(
-                    [(x_min - padding, y_min - padding),
-                     (x_max + padding, y_max + padding)],
-                    outline='blue', width=max(2, int(3 * scale_x))
-                )
-                
-                # Draw individual bubbles (A, B, C, D)
-                for bubble in q['bubbles']:
-                    x = bubble['x'] * scale_x
-                    y = bubble['y'] * scale_y
-                    r = bubble['radius'] * scale_x
-                    draw.ellipse(
-                        [(x - r, y - r), (x + r, y + r)],
-                        outline='lime', width=max(2, int(2 * scale_x))
-                    )
-            
-            print(f"[DEBUG] Visualization complete")
-            
-            # Display annotated image
-            display_pdf_image(pdf_image, is_detection=True)
-            
-        except Exception as e:
-            import traceback
-            print(f"Visualization error: {e}")
-            print(traceback.format_exc())
-            show_preview_error(f"Visualization error: {str(e)}")
     
     def update_preview_with_pdf(pdf_path):
         """Update preview frame with PDF"""
@@ -533,12 +420,13 @@ def create_integrated_gui():
         """Show database connection status"""
         if db:
             try:
-                # Test database connection
-                conn_status = db.test_connection()
-                if conn_status:
+                cursor = db.conn.cursor()
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='sheets'")
+                result = cursor.fetchone()
+                if result:
                     status_text = "✅ Database connected"
                 else:
-                    status_text = "⚠️ Database connection failed"
+                    status_text = "⚠️ Database not initialized"
             except:
                 status_text = "⚠️ Database status unknown"
         else:
@@ -605,7 +493,7 @@ def create_integrated_gui():
     config_inner = tk.Frame(config_card, bg=CARD_COLOR)
     config_inner.pack(fill=tk.BOTH, padx=20, pady=20)
     
-    tk.Label(config_inner, text="📝 Sheet Settings",
+    tk.Label(config_inner, text="🔧 Sheet Settings",
             font=("Segoe UI", 11, "bold"), bg=CARD_COLOR, fg="#333").pack(anchor="w", pady=(0, 15))
     
     # Number of Questions
@@ -721,11 +609,27 @@ def create_integrated_gui():
     progress_bar = ttk.Progressbar(status_inner, mode='indeterminate')
     progress_bar.pack(fill=tk.X, pady=(8, 0))
     
-    # Footer
-    footer_label = tk.Label(left_content,
+    # Back to main menu and footer
+    footer_frame = tk.Frame(left_content, bg=BG_COLOR)
+    footer_frame.pack(fill=tk.X, pady=(10, 0), side=tk.BOTTOM)
+    
+    # Back to main menu button
+    def back_to_menu():
+        parent = get_parent_window()
+        if parent:
+            root.destroy()
+            parent.deiconify()
+        else:
+            if messagebox.askyesno("Exit", "Close Sheet Generator?"):
+                root.destroy()
+    
+    ttk.Button(footer_frame, text="⬅ Main Menu", 
+              command=back_to_menu).pack(side=tk.LEFT)
+    
+    footer_label = tk.Label(footer_frame,
                           text="Step 1: Generate → Step 2: Extract Template",
                           font=("Segoe UI", 9), bg=BG_COLOR, fg="#999")
-    footer_label.pack(side=tk.BOTTOM, pady=(15, 0))
+    footer_label.pack(side=tk.RIGHT)
     
     # ===== RIGHT FRAME =====
     right_content = tk.Frame(right_frame, bg=BG_COLOR)

@@ -422,7 +422,7 @@ def main():
         # Grade
         answer_key_data = load_answer_key(key_path)
         scanned_answers_data = load_scanned_answers(answers_path)
-        results = grade_answers(answer_key_data, scanned_answers_data, partial_credit)
+        results = grade_answers(answer_key_data, scanned_answers_data, partial_credit=partial_credit)
         
         # Display results
         print_grading_summary(results)

@@ -1,13 +1,10 @@
 import cv2
 import numpy as np
-import pytesseract
 import fitz  # PyMuPDF
 import os
 import json
 from datetime import datetime
 from PIL import Image
-
-pytesseract.pytesseract.tesseract_cmd = r'C:\\Users\\Admin\\AppData\\Local\\Programs\\Tesseract-OCR\\tesseract.exe'
 
 def convert_pdf_to_png(pdf_path, output_folder='pdf_converted', dpi=300):
     """
