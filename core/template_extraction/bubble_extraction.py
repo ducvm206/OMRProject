@@ -162,9 +162,9 @@ def detect_corner_markers(image, show_debug=True):
             cv2.circle(debug_img, (cx, cy), 10, (255, 0, 0), -1)
         
         # Draw the ID region boundary
-        cv2.rectangle(debug_img, (x_min, y_min), (x_max, y_max), (0, 255, 255), 3)
+        cv2.rectangle(debug_img, (x_min, y_min), (x_max, y_max), (255, 0, 255), 3)
         cv2.putText(debug_img, "ID REGION", (x_min, y_min - 10),
-                   cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+                   cv2.FONT_HERSHEY_SIMPLEX, 3, (255, 0, 255), 2)
         
         # Resize for display if needed
         height, width = debug_img.shape[:2]

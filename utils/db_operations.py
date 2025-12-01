@@ -1,11 +1,13 @@
 """
 Database operations utility module
 Handles all database interactions for sheets, templates, answer keys, and grading
+Updated for new schema with MCQ/written question split and score tracking
 """
 import os
 import sys
 import json
 import datetime
+import numpy as np
 
 # Add project root to path
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -13,6 +15,38 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from core.database import GradingDatabase
+
+
+def _native(obj):
+    """Convert NumPy types to native Python types for JSON serialization"""
+    # Handle NumPy integers (compatible with NumPy 2.0)
+    if isinstance(obj, np.integer):
+        return int(obj)
+    # Handle NumPy floats (compatible with NumPy 2.0)
+    if isinstance(obj, np.floating):
+        return float(obj)
+    # Handle NumPy booleans
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    # Handle NumPy arrays
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    # Handle objects with .item() method (generic NumPy scalars)
+    if hasattr(obj, "item") and callable(getattr(obj, "item")):
+        try:
+            return obj.item()
+        except (ValueError, TypeError):
+            pass
+    # Recursively handle lists
+    if isinstance(obj, list):
+        return [_native(x) for x in obj]
+    # Recursively handle tuples
+    if isinstance(obj, tuple):
+        return tuple(_native(x) for x in obj)
+    # Recursively handle dicts
+    if isinstance(obj, dict):
+        return {k: _native(v) for k, v in obj.items()}
+    return obj
 
 
 class DatabaseOperations:
@@ -96,7 +130,9 @@ class DatabaseOperations:
     # TEMPLATE OPERATIONS
     # ============================================
     
-    def save_template(self, sheet_id, name, json_path, template_data, total_questions, has_student_id=True):
+    def save_template(self, sheet_id, name, json_path, template_data, 
+                     multiple_choice_questions=0, written_answer_questions=0, 
+                     has_student_id=True):
         """
         Save a template extracted from a sheet
         
@@ -105,7 +141,8 @@ class DatabaseOperations:
             name: Template name
             json_path: Path to template JSON file
             template_data: Full template JSON as dict
-            total_questions: Number of questions
+            multiple_choice_questions: Number of MCQ questions
+            written_answer_questions: Number of written questions
             has_student_id: Whether template has student ID field
             
         Returns:
@@ -119,9 +156,11 @@ class DatabaseOperations:
             
             cursor = self.db.conn.execute(
                 """INSERT INTO templates 
-                   (sheet_id, name, json_path, template_info, total_questions, has_student_id)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (sheet_id, name, json_path, template_info_json, total_questions, has_student_id)
+                   (sheet_id, name, json_path, template_info, 
+                    multiple_choice_questions, written_answer_questions, has_student_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (sheet_id, name, json_path, template_info_json,
+                 multiple_choice_questions, written_answer_questions, has_student_id)
             )
             self.db.conn.commit()
             template_id = cursor.lastrowid
@@ -177,7 +216,9 @@ class DatabaseOperations:
         
         try:
             cursor = self.db.conn.execute(
-                "SELECT id, name, total_questions, created_at FROM templates ORDER BY created_at DESC"
+                """SELECT id, name, multiple_choice_questions, written_answer_questions, 
+                          created_at 
+                   FROM templates ORDER BY created_at DESC"""
             )
             return cursor.fetchall()
         except Exception as e:
@@ -188,7 +229,8 @@ class DatabaseOperations:
     # ANSWER KEY OPERATIONS
     # ============================================
     
-    def save_answer_key(self, template_id, name, json_path, key_data, created_by='manual'):
+    def save_answer_key(self, template_id, name, json_path, key_data, 
+                       written_key_data=None, created_by='manual'):
         """
         Save an answer key linked to a template
         
@@ -196,7 +238,8 @@ class DatabaseOperations:
             template_id: FK to templates table
             name: Answer key name
             json_path: Path to answer key JSON file
-            key_data: Full answer key JSON as dict
+            key_data: MCQ answer key JSON as dict
+            written_key_data: Written answer key JSON as dict (optional)
             created_by: 'manual' or 'scan'
             
         Returns:
@@ -207,12 +250,13 @@ class DatabaseOperations:
         
         try:
             key_info_json = json.dumps(key_data, ensure_ascii=False)
+            written_key_info_json = json.dumps(written_key_data, ensure_ascii=False) if written_key_data else None
             
             cursor = self.db.conn.execute(
                 """INSERT INTO answer_keys 
-                   (template_id, name, json_path, key_info, created_by)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (template_id, name, json_path, key_info_json, created_by)
+                   (template_id, name, json_path, key_info, written_key_info, created_by)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (template_id, name, json_path, key_info_json, written_key_info_json, created_by)
             )
             self.db.conn.commit()
             key_id = cursor.lastrowid
@@ -235,6 +279,8 @@ class DatabaseOperations:
             if row:
                 result = dict(row)
                 result['key_data'] = json.loads(result['key_info'])
+                if result['written_key_info']:
+                    result['written_key_data'] = json.loads(result['written_key_info'])
                 return result
             return None
         except Exception as e:
@@ -254,6 +300,8 @@ class DatabaseOperations:
             if row:
                 result = dict(row)
                 result['key_data'] = json.loads(result['key_info'])
+                if result['written_key_info']:
+                    result['written_key_data'] = json.loads(result['written_key_info'])
                 return result
             return None
         except Exception as e:
@@ -353,7 +401,10 @@ class DatabaseOperations:
     # ============================================
     
     def save_graded_sheet(self, key_id, student_id, exam_name, filled_sheet_path,
-                         score, total_questions, percentage, correct, wrong, blank, threshold):
+                         total_mcq_questions, total_written_questions,
+                         mcq_correct_count, mcq_wrong_count, mcq_blank_count,
+                         written_correct_count, written_wrong_count, written_blank_count,
+                         score=0.0, threshold=50):
         """
         Save a graded sheet result
         
@@ -362,12 +413,15 @@ class DatabaseOperations:
             student_id: Student identifier
             exam_name: Name of the exam
             filled_sheet_path: Path to filled/scanned sheet
-            score: Total score
-            total_questions: Total number of questions
-            percentage: Percentage score
-            correct: Number of correct answers
-            wrong: Number of wrong answers
-            blank: Number of blank answers
+            total_mcq_questions: Total MCQ questions
+            total_written_questions: Total written questions
+            mcq_correct_count: Correct MCQ answers
+            mcq_wrong_count: Wrong MCQ answers
+            mcq_blank_count: Blank MCQ answers
+            written_correct_count: Correct written answers
+            written_wrong_count: Wrong written answers
+            written_blank_count: Blank written answers
+            score: Actual score achieved (points)
             threshold: Detection threshold used
             
         Returns:
@@ -382,12 +436,17 @@ class DatabaseOperations:
             
             cursor = self.db.conn.execute(
                 """INSERT INTO graded_sheets 
-                   (key_id, student_id, exam_name, filled_sheet_path, score, 
-                    total_questions, percentage, correct_count, wrong_count, 
-                    blank_count, threshold_used)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (key_id, student_id, exam_name, filled_sheet_path, score,
-                 total_questions, percentage, correct, wrong, blank, threshold)
+                   (key_id, student_id, exam_name, filled_sheet_path,
+                    total_mcq_questions, total_written_questions,
+                    mcq_correct_count, mcq_wrong_count, mcq_blank_count,
+                    written_correct_count, written_wrong_count, written_blank_count,
+                    score, threshold_used)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (key_id, student_id, exam_name, filled_sheet_path,
+                 total_mcq_questions, total_written_questions,
+                 mcq_correct_count, mcq_wrong_count, mcq_blank_count,
+                 written_correct_count, written_wrong_count, written_blank_count,
+                 score, threshold)
             )
             self.db.conn.commit()
             graded_sheet_id = cursor.lastrowid
@@ -397,18 +456,21 @@ class DatabaseOperations:
             print(f"[DB] Error saving graded sheet: {e}")
             return None
     
-    def save_question_result(self, graded_sheet_id, question_number, 
-                            student_answer, correct_answer, is_correct, points=1.0):
+    def save_question_result(self, graded_sheet_id, question_number, question_type,
+                            student_answer, correct_answer, is_correct, points=1.0,
+                            digit_details=None):
         """
         Save a question result
         
         Args:
             graded_sheet_id: FK to graded_sheets table
             question_number: Question number
-            student_answer: Student's answer (e.g., "A,C")
-            correct_answer: Correct answer (e.g., "A,C")
+            question_type: 'mcq' or 'written'
+            student_answer: Student's answer
+            correct_answer: Correct answer
             is_correct: Boolean indicating if answer is correct
             points: Points for this question (default 1.0)
+            digit_details: OCR metadata for written answers (optional)
             
         Returns:
             True if successful, False otherwise
@@ -417,18 +479,26 @@ class DatabaseOperations:
             return False
         
         try:
+            # Convert NumPy types to native Python types before JSON serialization
+            if digit_details is not None:
+                digit_details = _native(digit_details)
+            
+            digit_details_json = json.dumps(digit_details, ensure_ascii=False) if digit_details else None
+            
             self.db.conn.execute(
                 """INSERT INTO question_results 
-                   (graded_sheet_id, question_number, student_answer, correct_answer, 
-                    is_correct, points)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (graded_sheet_id, question_number, student_answer, correct_answer,
-                 is_correct, points)
+                   (graded_sheet_id, question_number, question_type,
+                    student_answer, correct_answer, is_correct, points, digit_details)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (graded_sheet_id, question_number, question_type,
+                 student_answer, correct_answer, is_correct, points, digit_details_json)
             )
             self.db.conn.commit()
             return True
         except Exception as e:
             print(f"[DB] Error saving question result: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def save_batch_question_results(self, graded_sheet_id, question_results):
@@ -437,7 +507,7 @@ class DatabaseOperations:
         
         Args:
             graded_sheet_id: FK to graded_sheets table
-            question_results: List of tuples (q_num, student_ans, correct_ans, is_correct, points)
+            question_results: List of tuples (q_num, q_type, student_ans, correct_ans, is_correct, points, digit_details)
             
         Returns:
             Number of results saved
@@ -448,9 +518,14 @@ class DatabaseOperations:
         count = 0
         try:
             for result in question_results:
-                q_num, student_ans, correct_ans, is_correct, points = result
-                if self.save_question_result(graded_sheet_id, q_num, student_ans, 
-                                           correct_ans, is_correct, points):
+                if len(result) == 6:
+                    q_num, q_type, student_ans, correct_ans, is_correct, points = result
+                    digit_details = None
+                else:
+                    q_num, q_type, student_ans, correct_ans, is_correct, points, digit_details = result
+                
+                if self.save_question_result(graded_sheet_id, q_num, q_type, student_ans, 
+                                           correct_ans, is_correct, points, digit_details):
                     count += 1
             return count
         except Exception as e:
@@ -491,6 +566,66 @@ class DatabaseOperations:
             print(f"[DB] Error getting exam summary: {e}")
             return None
     
+    def get_mcq_difficulty(self, key_id=None):
+        """Get MCQ difficulty analysis"""
+        if not self.db:
+            return []
+        
+        try:
+            if key_id:
+                cursor = self.db.conn.execute(
+                    "SELECT * FROM mcq_difficulty WHERE key_id = ? ORDER BY question_number",
+                    (key_id,)
+                )
+            else:
+                cursor = self.db.conn.execute(
+                    "SELECT * FROM mcq_difficulty ORDER BY key_id, question_number"
+                )
+            return cursor.fetchall()
+        except Exception as e:
+            print(f"[DB] Error getting MCQ difficulty: {e}")
+            return []
+    
+    def get_written_difficulty(self, key_id=None):
+        """Get written question difficulty analysis"""
+        if not self.db:
+            return []
+        
+        try:
+            if key_id:
+                cursor = self.db.conn.execute(
+                    "SELECT * FROM written_difficulty WHERE key_id = ? ORDER BY question_number",
+                    (key_id,)
+                )
+            else:
+                cursor = self.db.conn.execute(
+                    "SELECT * FROM written_difficulty ORDER BY key_id, question_number"
+                )
+            return cursor.fetchall()
+        except Exception as e:
+            print(f"[DB] Error getting written difficulty: {e}")
+            return []
+    
+    def get_overall_difficulty(self, key_id=None):
+        """Get overall question difficulty analysis"""
+        if not self.db:
+            return []
+        
+        try:
+            if key_id:
+                cursor = self.db.conn.execute(
+                    "SELECT * FROM overall_question_difficulty WHERE key_id = ? ORDER BY question_number",
+                    (key_id,)
+                )
+            else:
+                cursor = self.db.conn.execute(
+                    "SELECT * FROM overall_question_difficulty ORDER BY key_id, question_number"
+                )
+            return cursor.fetchall()
+        except Exception as e:
+            print(f"[DB] Error getting overall difficulty: {e}")
+            return []
+    
     def get_recent_grades(self, limit=50):
         """Get recent grading results"""
         if not self.db:
@@ -498,7 +633,14 @@ class DatabaseOperations:
         
         try:
             cursor = self.db.conn.execute(
-                f"SELECT * FROM recent_grades LIMIT {limit}"
+                f"""SELECT gs.id, gs.student_id, gs.exam_name, gs.graded_at,
+                           gs.score,
+                           (gs.total_mcq_questions + gs.total_written_questions) as total_questions,
+                           ak.name as answer_key_name
+                    FROM graded_sheets gs
+                    JOIN answer_keys ak ON gs.key_id = ak.id
+                    ORDER BY gs.graded_at DESC
+                    LIMIT {limit}"""
             )
             return cursor.fetchall()
         except Exception as e:

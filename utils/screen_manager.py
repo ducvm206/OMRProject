@@ -54,9 +54,23 @@ class ScreenManager:
             from ui.key_ui import AnswerKeyUI
             
             new_window = tk.Toplevel(self.root)
+            
+            # Make window modal and transient
+            new_window.transient(self.root)
+            new_window.grab_set()
+            
+            # Prevent home screen from stealing focus
+            new_window.focus_force()
+            
             key_ui = AnswerKeyUI(new_window)
             
-            # Don't call run() - window is already managed by Toplevel
+            # Ensure cleanup releases grab
+            def on_close():
+                new_window.grab_release()
+                new_window.destroy()
+            
+            new_window.protocol("WM_DELETE_WINDOW", on_close)
+            
             print("[SCREEN] Answer key window opened")
             
         except Exception as e:
@@ -69,7 +83,22 @@ class ScreenManager:
             from ui.sheet_ui import SheetGenerationUI
             
             new_window = tk.Toplevel(self.root)
+            
+            # Make window modal and transient
+            new_window.transient(self.root)
+            new_window.grab_set()
+            
+            # Prevent home screen from stealing focus
+            new_window.focus_force()
+            
             sheet_ui = SheetGenerationUI(new_window)
+            
+            # Ensure cleanup releases grab
+            def on_close():
+                new_window.grab_release()
+                new_window.destroy()
+            
+            new_window.protocol("WM_DELETE_WINDOW", on_close)
             
             print("[SCREEN] Sheet generation window opened")
             
@@ -83,7 +112,23 @@ class ScreenManager:
             from ui.grading_ui import GradingUI
             
             new_window = tk.Toplevel(self.root)
+            
+            # Make window modal and transient
+            new_window.transient(self.root)
+            new_window.grab_set()
+            
+            # Prevent home screen from stealing focus
+            new_window.focus_force()
+            
             grading_ui = GradingUI(new_window)
+            
+            # Ensure cleanup releases grab
+            def on_close():
+                grading_ui.on_close()
+                new_window.grab_release()
+                new_window.destroy()
+            
+            new_window.protocol("WM_DELETE_WINDOW", on_close)
             
             print("[SCREEN] Grading window opened")
             

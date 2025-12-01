@@ -1,7 +1,9 @@
 """
-query_db.py - Database query and inspection tool
+query_db.py - Database query and inspection tool (Updated for new schema)
 
 This script provides utilities to view and query the grading system database.
+Updated to reflect that MCQ/written question counts are determined during
+answer key creation based on max total points for each part.
 
 Usage:
     python database/query_db.py [command]
@@ -11,10 +13,11 @@ Commands:
     tables    - List all tables with row counts
     views     - List all views
     students  - Show all students
-    sessions  - Show grading sessions
+    keys      - Show answer keys with question type breakdown
     recent    - Show recent grades
     schema    - Show table schemas
-    export    - Export data to CSV
+    export    - Export table to CSV
+    questions - Show question difficulty by type
 """
 
 import sqlite3
@@ -23,11 +26,14 @@ import sys
 import json
 from datetime import datetime
 
-# Get project root directory
+# Paths
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(PROJECT_ROOT, "grading_system.db")
 
 
+# ------------------------------------------------------------
+# CONNECTION
+# ------------------------------------------------------------
 def connect_db():
     """Connect to database"""
     if not os.path.exists(DB_PATH):
@@ -36,10 +42,13 @@ def connect_db():
         sys.exit(1)
     
     conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row  # Access columns by name
+    conn.row_factory = sqlite3.Row
     return conn
 
 
+# ------------------------------------------------------------
+# DATABASE STATS
+# ------------------------------------------------------------
 def show_stats():
     """Show database statistics"""
     conn = connect_db()
@@ -48,259 +57,404 @@ def show_stats():
     print("\n" + "="*70)
     print("DATABASE STATISTICS")
     print("="*70)
-    
-    # Database info
+
     print(f"\nDatabase: {DB_PATH}")
-    db_size = os.path.getsize(DB_PATH) / 1024  # KB
-    print(f"Size: {db_size:.2f} KB")
-    
-    # Table counts
+    print(f"Size: {os.path.getsize(DB_PATH)/1024:.2f} KB")
+
+    # ---- Table Counts ----
     tables = [
         ('sheets', 'Sheets'),
         ('templates', 'Templates'),
         ('answer_keys', 'Answer Keys'),
         ('students', 'Students'),
-        ('grading_sessions', 'Grading Sessions'),
         ('graded_sheets', 'Graded Sheets'),
         ('question_results', 'Question Results')
     ]
     
     print("\nTable Counts:")
-    for table_name, display_name in tables:
-        cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
-        count = cursor.fetchone()[0]
-        print(f"  {display_name:.<40} {count:>5}")
-    
-    # Sheet-Template relationship stats
+    for table, disp in tables:
+        try:
+            cursor.execute(f"SELECT COUNT(*) FROM {table}")
+            count = cursor.fetchone()[0]
+            print(f"  {disp:.<40} {count:>5}")
+        except:
+            print(f"  {disp:.<40} (missing)")
+
+    # ---- Question Type Breakdown ----
     cursor.execute("""
         SELECT 
-            COUNT(*) as total_sheets,
-            SUM(CASE WHEN is_template = 1 THEN 1 ELSE 0 END) as template_sheets,
-            COUNT(DISTINCT t.id) as templates_created
-        FROM sheets s
-        LEFT JOIN templates t ON s.id = t.sheet_id
+            SUM(total_mcq_questions) as total_mcq,
+            SUM(total_written_questions) as total_written
+        FROM graded_sheets
     """)
-    sheet_stats = cursor.fetchone()
-    
-    print(f"\nSheet-Template Relationships:")
-    print(f"  Total sheets:.................... {sheet_stats['total_sheets']}")
-    print(f"  Sheets marked as templates:...... {sheet_stats['template_sheets']}")
-    print(f"  Templates extracted:............. {sheet_stats['templates_created']}")
-    
-    # Summary statistics
+    result = cursor.fetchone()
+    if result and (result['total_mcq'] or result['total_written']):
+        print("\nQuestion Type Distribution:")
+        print(f"  Total MCQ questions graded........ {result['total_mcq'] or 0}")
+        print(f"  Total Written questions graded.... {result['total_written'] or 0}")
+
+    # ---- Score summary ----
     cursor.execute("SELECT COUNT(*) FROM graded_sheets")
-    total_sheets = cursor.fetchone()[0]
-    
-    if total_sheets > 0:
-        cursor.execute("SELECT AVG(percentage), MIN(percentage), MAX(percentage) FROM graded_sheets")
-        avg, min_score, max_score = cursor.fetchone()
+    total = cursor.fetchone()[0]
+
+    if total > 0:
+        cursor.execute("""
+            SELECT
+                AVG(CASE
+                        WHEN total_mcq_questions + total_written_questions > 0
+                        THEN (mcq_correct_count + written_correct_count) * 100.0
+                             / (total_mcq_questions + total_written_questions)
+                END) as avg_score,
+                MIN(CASE
+                        WHEN total_mcq_questions + total_written_questions > 0
+                        THEN (mcq_correct_count + written_correct_count) * 100.0
+                             / (total_mcq_questions + total_written_questions)
+                END) as min_score,
+                MAX(CASE
+                        WHEN total_mcq_questions + total_written_questions > 0
+                        THEN (mcq_correct_count + written_correct_count) * 100.0
+                             / (total_mcq_questions + total_written_questions)
+                END) as max_score,
+                AVG(CASE
+                        WHEN total_mcq_questions > 0
+                        THEN mcq_correct_count * 100.0 / total_mcq_questions
+                END) as avg_mcq_score,
+                AVG(CASE
+                        WHEN total_written_questions > 0
+                        THEN written_correct_count * 100.0 / total_written_questions
+                END) as avg_written_score
+            FROM graded_sheets
+        """)
+        row = cursor.fetchone()
         
-        print("\nGrading Statistics:")
-        print(f"  Total sheets graded:............ {total_sheets}")
-        print(f"  Average score:.................. {avg:.2f}%")
-        print(f"  Lowest score:................... {min_score:.2f}%")
-        print(f"  Highest score:.................. {max_score:.2f}%")
-    
+        print("\nGrading Stats:")
+        print(f"  Total graded sheets:.............. {total}")
+        print(f"  Average overall score:............ {row['avg_score']:.2f}%")
+        print(f"  Lowest score:..................... {row['min_score']:.2f}%")
+        print(f"  Highest score:.................... {row['max_score']:.2f}%")
+        
+        if row['avg_mcq_score'] is not None:
+            print(f"  Average MCQ score:................ {row['avg_mcq_score']:.2f}%")
+        if row['avg_written_score'] is not None:
+            print(f"  Average Written score:............ {row['avg_written_score']:.2f}%")
+
     conn.close()
 
 
+# ------------------------------------------------------------
+# LIST TABLES
+# ------------------------------------------------------------
 def list_tables():
-    """List all tables with row counts"""
     conn = connect_db()
     cursor = conn.cursor()
-    
+
     print("\n" + "="*70)
     print("DATABASE TABLES")
     print("="*70)
-    
+
     cursor.execute("""
         SELECT name FROM sqlite_master 
         WHERE type='table' AND name NOT LIKE 'sqlite_%'
         ORDER BY name
     """)
-    
     tables = cursor.fetchall()
-    
+
     print(f"\nTotal tables: {len(tables)}\n")
-    
-    for table in tables:
-        table_name = table[0]
-        cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+
+    for row in tables:
+        table = row["name"]
+        cursor.execute(f"SELECT COUNT(*) FROM {table}")
         count = cursor.fetchone()[0]
-        
-        # Get column info
-        cursor.execute(f"PRAGMA table_info({table_name})")
-        columns = cursor.fetchall()
-        col_count = len(columns)
-        
-        print(f"{table_name}")
-        print(f"  Rows: {count}, Columns: {col_count}")
-        print(f"  Columns: {', '.join([col[1] for col in columns[:5]])}" + 
-              (f", ..." if col_count > 5 else ""))
+
+        cursor.execute(f"PRAGMA table_info({table})")
+        cols = cursor.fetchall()
+
+        print(f"{table}")
+        print(f"  Rows: {count}, Columns: {len(cols)}")
+        print(f"  Columns: {', '.join(col[1] for col in cols[:6])}"
+              + ("..." if len(cols) > 6 else ""))
         print()
-    
+
     conn.close()
 
 
+# ------------------------------------------------------------
+# LIST VIEWS
+# ------------------------------------------------------------
 def list_views():
-    """List all views"""
     conn = connect_db()
     cursor = conn.cursor()
-    
+
     print("\n" + "="*70)
     print("DATABASE VIEWS")
     print("="*70)
-    
+
     cursor.execute("""
-        SELECT name, sql FROM sqlite_master 
+        SELECT name FROM sqlite_master
         WHERE type='view'
         ORDER BY name
     """)
-    
     views = cursor.fetchall()
+
+    for v in views:
+        print(f"  ✓ {v['name']}")
     
-    print(f"\nTotal views: {len(views)}\n")
-    
-    for view in views:
-        view_name = view[0]
-        print(f"✓ {view_name}")
-        
-        # Test if view works
-        try:
-            cursor.execute(f"SELECT COUNT(*) FROM {view_name}")
-            count = cursor.fetchone()[0]
-            print(f"    Rows: {count}")
-        except Exception as e:
-            print(f"    Error: {e}")
-        print()
-    
+    if not views:
+        print("No views defined.")
+
     conn.close()
 
 
+# ------------------------------------------------------------
+# STUDENTS
+# ------------------------------------------------------------
 def show_students():
-    """Show all students"""
     conn = connect_db()
     cursor = conn.cursor()
-    
+
     print("\n" + "="*70)
-    print("STUDENTS")
+    print("STUDENTS SUMMARY")
     print("="*70)
-    
+
     cursor.execute("""
-        SELECT s.student_id, s.name, s.class, s.created_at,
-               COUNT(gs.id) as sheets_graded,
-               ROUND(AVG(gs.percentage), 2) as avg_score
+        SELECT 
+            s.student_id,
+            s.name,
+            s.class,
+            s.total_exams,
+            s.total_score,
+            s.total_questions,
+            s.avg_percentage
         FROM students s
-        LEFT JOIN graded_sheets gs ON s.student_id = gs.student_id
-        GROUP BY s.student_id
         ORDER BY s.created_at DESC
     """)
-    
-    students = cursor.fetchall()
-    
-    if not students:
-        print("\nNo students found.")
-        conn.close()
+
+    rows = cursor.fetchall()
+    if not rows:
+        print("\nNo students found.\n")
         return
-    
-    print(f"\nTotal students: {len(students)}\n")
-    
-    print(f"{'Student ID':<12} {'Name':<20} {'Class':<10} {'Sheets':<8} {'Avg Score':<10}")
-    print("-" * 70)
-    
-    for student in students:
-        sid = student['student_id'] or 'N/A'
-        name = student['name'] or 'Unknown'
-        cls = student['class'] or '-'
-        sheets = student['sheets_graded']
-        avg = student['avg_score'] or 0.0
-        
-        print(f"{sid:<12} {name:<20} {cls:<10} {sheets:<8} {avg:.2f}%")
-    
+
+    print(f"\n{'ID':<12} {'Name':<20} {'Class':<10} {'Exams':<8} "
+          f"{'Correct/Total':<15} {'Avg %':<8}")
+    print("-"*75)
+
+    for s in rows:
+        correct = s["total_score"]
+        total = s["total_questions"]
+        avg_pct = s["avg_percentage"] or 0
+
+        print(f"{s['student_id']:<12} "
+              f"{(s['name'] or 'Unknown'):<20} "
+              f"{(s['class'] or '-'):<10} "
+              f"{s['total_exams']:<8} "
+              f"{correct}/{total:<14} "
+              f"{avg_pct:>6.2f}%")
+
     conn.close()
 
 
-def show_sessions():
-    """Show grading sessions"""
+# ------------------------------------------------------------
+# ANSWER KEYS WITH QUESTION BREAKDOWN
+# ------------------------------------------------------------
+def show_answer_keys():
+    """Show answer keys with question type breakdown"""
     conn = connect_db()
     cursor = conn.cursor()
-    
+
     print("\n" + "="*70)
-    print("GRADING SESSIONS")
+    print("ANSWER KEYS - QUESTION TYPE BREAKDOWN")
     print("="*70)
-    
+    print("\n[NOTE] MCQ and written question counts are determined from")
+    print("       max total points entered during answer key creation\n")
+
     cursor.execute("""
-        SELECT * FROM session_summary
-        ORDER BY created_at DESC
-        LIMIT 20
+        SELECT 
+            ak.id,
+            ak.name,
+            ak.created_at,
+            t.name as template_name,
+            ak.key_info,
+            ak.written_key_info
+        FROM answer_keys ak
+        JOIN templates t ON ak.template_id = t.id
+        ORDER BY ak.created_at DESC
     """)
-    
-    sessions = cursor.fetchall()
-    
-    if not sessions:
-        print("\nNo grading sessions found.")
-        conn.close()
+
+    keys = cursor.fetchall()
+
+    if not keys:
+        print("No answer keys found.\n")
         return
-    
-    print(f"\nShowing latest {min(len(sessions), 20)} sessions:\n")
-    
-    for session in sessions:
-        print(f"Session #{session['id']}: {session['name']}")
-        print(f"  Template: {session['template_name']} ({session['total_questions']} questions)")
-        print(f"  Created: {session['created_at']}")
-        print(f"  Sheets graded: {session['sheets_graded']}")
-        if session['sheets_graded'] > 0:
-            print(f"  Avg score: {session['avg_score']:.2f}% (min: {session['min_score']:.2f}%, max: {session['max_score']:.2f}%)")
-        print(f"  Batch mode: {'Yes' if session['is_batch'] else 'No'}")
-        print()
-    
+
+    for key in keys:
+        print(f"\nKey ID: {key['id']}")
+        print(f"Name: {key['name']}")
+        print(f"Template: {key['template_name']}")
+        print(f"Created: {key['created_at'][:19]}")
+        
+        # Parse MCQ info
+        mcq_count = 0
+        mcq_points = 0
+        try:
+            mcq_info = json.loads(key['key_info'])
+            metadata = mcq_info.get('metadata', {})
+            mcq_count = metadata.get('total_mcq_questions', 0)
+            mcq_points = metadata.get('mcq_max_points', mcq_count)
+        except:
+            pass
+        
+        # Parse written info
+        written_count = 0
+        written_points = 0
+        if key['written_key_info']:
+            try:
+                written_info = json.loads(key['written_key_info'])
+                metadata = written_info.get('metadata', {})
+                written_count = metadata.get('total_written_questions', 0)
+                written_points = metadata.get('written_max_points', written_count)
+            except:
+                pass
+        
+        print(f"\nQuestion Breakdown:")
+        print(f"  MCQ Questions:......... {mcq_count:>3} (max {mcq_points} points)")
+        print(f"  Written Questions:..... {written_count:>3} (max {written_points} points)")
+        print(f"  Total Questions:....... {mcq_count + written_count:>3}")
+        print(f"  Total Max Points:...... {mcq_points + written_points:>3}")
+        
+        # Show usage stats
+        cursor.execute("""
+            SELECT COUNT(*) as usage_count
+            FROM graded_sheets
+            WHERE key_id = ?
+        """, (key['id'],))
+        usage = cursor.fetchone()['usage_count']
+        print(f"  Times Used:............ {usage:>3}")
+        
+        print("-" * 70)
+
     conn.close()
 
 
+# ------------------------------------------------------------
+# RECENT GRADES
+# ------------------------------------------------------------
 def show_recent_grades():
-    """Show recent grading results"""
     conn = connect_db()
     cursor = conn.cursor()
-    
+
     print("\n" + "="*70)
-    print("RECENT GRADES")
+    print("RECENT GRADES (with MCQ/Written breakdown)")
     print("="*70)
-    
+
     cursor.execute("""
-        SELECT * FROM recent_grades
+        SELECT 
+            gs.id,
+            gs.student_id,
+            gs.exam_name,
+            gs.total_mcq_questions,
+            gs.total_written_questions,
+            gs.mcq_correct_count,
+            gs.written_correct_count,
+            gs.graded_at
+        FROM graded_sheets gs
+        ORDER BY gs.graded_at DESC
         LIMIT 20
     """)
-    
-    grades = cursor.fetchall()
-    
-    if not grades:
+
+    rows = cursor.fetchall()
+
+    if not rows:
         print("\nNo grades found.")
-        conn.close()
         return
-    
-    print(f"\nShowing latest {len(grades)} grades:\n")
-    
-    print(f"{'ID':<5} {'Student ID':<12} {'Score':<10} {'%':<8} {'Session':<20} {'Date':<20}")
-    print("-" * 85)
-    
-    for grade in grades:
-        gid = grade['id']
-        sid = grade['student_id'] or 'N/A'
-        score = grade['score']
-        pct = grade['percentage']
-        session = grade['session_name'][:18]
-        date = grade['graded_at'][:19]
+
+    print(f"\n{'ID':<5} {'Student':<12} {'MCQ':<12} {'Written':<12} {'Total %':<8} {'Date':<20}")
+    print("-"*80)
+
+    for g in rows:
+        total_q = g["total_mcq_questions"] + g["total_written_questions"]
+        total_correct = g["mcq_correct_count"] + g["written_correct_count"]
+        pct = (total_correct / total_q * 100) if total_q else 0
         
-        print(f"{gid:<5} {sid:<12} {score:<10} {pct:>6.2f}% {session:<20} {date}")
-    
+        mcq_str = f"{g['mcq_correct_count']}/{g['total_mcq_questions']}" if g['total_mcq_questions'] else "-"
+        written_str = f"{g['written_correct_count']}/{g['total_written_questions']}" if g['total_written_questions'] else "-"
+
+        print(f"{g['id']:<5} "
+              f"{g['student_id']:<12} "
+              f"{mcq_str:<12} "
+              f"{written_str:<12} "
+              f"{pct:>6.2f}% "
+              f"{g['graded_at'][:19]}")
+
     conn.close()
 
 
-def show_schema(table_name=None):
-    """Show table schema"""
+# ------------------------------------------------------------
+# QUESTION DIFFICULTY BY TYPE
+# ------------------------------------------------------------
+def show_question_difficulty():
+    """Show question difficulty broken down by type"""
     conn = connect_db()
     cursor = conn.cursor()
+
+    print("\n" + "="*70)
+    print("QUESTION DIFFICULTY ANALYSIS")
+    print("="*70)
+
+    # MCQ difficulty
+    cursor.execute("""
+        SELECT * FROM mcq_difficulty
+        ORDER BY success_rate ASC
+        LIMIT 10
+    """)
     
+    mcq_results = cursor.fetchall()
+    
+    if mcq_results:
+        print("\nMOST DIFFICULT MCQ QUESTIONS:")
+        print(f"{'Key ID':<10} {'Question':<10} {'Attempts':<10} {'Correct':<10} {'Success %':<10}")
+        print("-"*50)
+        
+        for row in mcq_results:
+            print(f"{row['key_id']:<10} "
+                  f"Q{row['question_number']:<9} "
+                  f"{row['attempts']:<10} "
+                  f"{row['correct']:<10} "
+                  f"{row['success_rate']:>8.1f}%")
+    
+    # Written difficulty
+    cursor.execute("""
+        SELECT * FROM written_difficulty
+        ORDER BY success_rate ASC
+        LIMIT 10
+    """)
+    
+    written_results = cursor.fetchall()
+    
+    if written_results:
+        print("\nMOST DIFFICULT WRITTEN QUESTIONS:")
+        print(f"{'Key ID':<10} {'Question':<10} {'Attempts':<10} {'Correct':<10} {'Success %':<10}")
+        print("-"*50)
+        
+        for row in written_results:
+            print(f"{row['key_id']:<10} "
+                  f"Q{row['question_number']:<9} "
+                  f"{row['attempts']:<10} "
+                  f"{row['correct']:<10} "
+                  f"{row['success_rate']:>8.1f}%")
+    
+    if not mcq_results and not written_results:
+        print("\nNo question results found yet.")
+
+    conn.close()
+
+
+# ------------------------------------------------------------
+# SCHEMA VIEWER
+# ------------------------------------------------------------
+def show_schema(table_name=None):
+    conn = connect_db()
+    cursor = conn.cursor()
+
     if table_name:
         tables = [table_name]
     else:
@@ -310,219 +464,102 @@ def show_schema(table_name=None):
             ORDER BY name
         """)
         tables = [row[0] for row in cursor.fetchall()]
-    
+
     print("\n" + "="*70)
     print("TABLE SCHEMAS")
     print("="*70)
-    
+
     for table in tables:
         print(f"\nTable: {table}")
-        print("-" * 70)
-        
+        print("-"*70)
+
         cursor.execute(f"PRAGMA table_info({table})")
-        columns = cursor.fetchall()
-        
-        print(f"{'Column':<25} {'Type':<15} {'Not Null':<10} {'Default':<15} {'PK'}")
-        print("-" * 70)
-        
-        for col in columns:
-            col_name = col[1]
-            col_type = col[2]
-            not_null = 'YES' if col[3] else 'NO'
-            default = str(col[4]) if col[4] else ''
-            pk = 'YES' if col[5] else ''
-            
-            print(f"{col_name:<25} {col_type:<15} {not_null:<10} {default:<15} {pk}")
-    
+        cols = cursor.fetchall()
+
+        print(f"{'Column':<30} {'Type':<15} {'NotNull':<8} {'Default':<12} {'PK'}")
+        print("-"*70)
+
+        for col in cols:
+            print(f"{col[1]:<30} {col[2]:<15} "
+                  f"{('YES' if col[3] else 'NO'):<8} "
+                  f"{str(col[4] or ''):<12} "
+                  f"{('YES' if col[5] else '')}")
+
     conn.close()
 
 
-def show_sheet_relationships():
-    """Show sheet-template relationships"""
+# ------------------------------------------------------------
+# EXPORT TABLE TO CSV
+# ------------------------------------------------------------
+def export_table(table_name, output_dir="exports"):
     conn = connect_db()
     cursor = conn.cursor()
-    
-    print("\n" + "="*70)
-    print("SHEET-TEMPLATE RELATIONSHIPS")
-    print("="*70)
-    
-    cursor.execute("""
-        SELECT 
-            s.id as sheet_id,
-            s.image_path,
-            s.is_template,
-            s.created_at as sheet_created,
-            t.id as template_id,
-            t.name as template_name,
-            t.total_questions
-        FROM sheets s
-        LEFT JOIN templates t ON s.id = t.sheet_id
-        ORDER BY s.created_at DESC
-        LIMIT 15
-    """)
-    
-    relationships = cursor.fetchall()
-    
-    if not relationships:
-        print("\nNo sheet-template relationships found.")
-        conn.close()
-        return
-    
-    print(f"\nShowing latest {len(relationships)} sheets:\n")
-    
-    for rel in relationships:
-        print(f"Sheet #{rel['sheet_id']}: {rel['image_path']}")
-        print(f"  Created: {rel['sheet_created']}")
-        print(f"  Is template: {'Yes' if rel['is_template'] else 'No'}")
-        
-        if rel['template_id']:
-            print(f"  Template: #{rel['template_id']} - {rel['template_name']}")
-            print(f"  Questions: {rel['total_questions']}")
-        else:
-            print(f"  Template: Not extracted")
-        print()
-    
-    conn.close()
 
-
-def show_question_difficulty():
-    """Show question difficulty analysis"""
-    conn = connect_db()
-    cursor = conn.cursor()
-    
-    print("\n" + "="*70)
-    print("QUESTION DIFFICULTY ANALYSIS")
-    print("="*70)
-    
-    cursor.execute("""
-        SELECT * FROM question_difficulty
-        ORDER BY question_number
-    """)
-    
-    questions = cursor.fetchall()
-    
-    if not questions:
-        print("\nNo question data found.")
-        conn.close()
-        return
-    
-    print(f"\nTotal questions analyzed: {len(questions)}\n")
-    
-    print(f"{'Q#':<4} {'Attempts':<10} {'Correct':<10} {'Wrong':<10} {'Success Rate':<12}")
-    print("-" * 50)
-    
-    for q in questions:
-        q_num = q['question_number']
-        attempts = q['total_attempts']
-        correct = q['correct_count']
-        wrong = q['wrong_count']
-        success = q['success_rate']
-        
-        print(f"{q_num:<4} {attempts:<10} {correct:<10} {wrong:<10} {success:>10.2f}%")
-    
-    # Show most and least difficult questions
-    cursor.execute("""
-        SELECT * FROM question_difficulty 
-        ORDER BY success_rate ASC 
-        LIMIT 5
-    """)
-    hardest = cursor.fetchall()
-    
-    cursor.execute("""
-        SELECT * FROM question_difficulty 
-        ORDER BY success_rate DESC 
-        LIMIT 5
-    """)
-    easiest = cursor.fetchall()
-    
-    print(f"\nTop 5 Most Difficult Questions:")
-    for q in hardest:
-        print(f"  Q{q['question_number']}: {q['success_rate']:.2f}% success")
-    
-    print(f"\nTop 5 Easiest Questions:")
-    for q in easiest:
-        print(f"  Q{q['question_number']}: {q['success_rate']:.2f}% success")
-    
-    conn.close()
-
-
-def export_table(table_name, output_dir='exports'):
-    """Export table to CSV"""
-    conn = connect_db()
-    cursor = conn.cursor()
-    
-    # Create exports directory
     os.makedirs(output_dir, exist_ok=True)
-    
-    # Get data
+
     cursor.execute(f"SELECT * FROM {table_name}")
     rows = cursor.fetchall()
-    
+
     if not rows:
-        print(f"\nTable '{table_name}' is empty. Nothing to export.")
-        conn.close()
+        print(f"[INFO] Table '{table_name}' is empty.")
         return
-    
-    # Export to CSV
+
+    output_path = os.path.join(
+        output_dir, f"{table_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    )
+
     import csv
-    output_path = os.path.join(output_dir, f"{table_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
-    
-    with open(output_path, 'w', newline='', encoding='utf-8') as f:
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        
-        # Write header
-        writer.writerow([description[0] for description in cursor.description])
-        
-        # Write rows
+        writer.writerow([col[0] for col in cursor.description])
         writer.writerows(rows)
-    
-    print(f"\n✓ Exported {len(rows)} rows to: {output_path}")
-    
+
+    print(f"\n✓ Exported {len(rows)} rows to {output_path}")
     conn.close()
 
 
+# ------------------------------------------------------------
+# MAIN
+# ------------------------------------------------------------
 def main():
-    """Main function"""
     import argparse
-    
-    parser = argparse.ArgumentParser(
-        description='Query and inspect the grading system database',
-        formatter_class=argparse.RawDescriptionHelpFormatter
+
+    parser = argparse.ArgumentParser(description="Query the database")
+    parser.add_argument(
+        "command",
+        nargs="?",
+        default="stats",
+        choices=[
+            "stats", "tables", "views",
+            "students", "keys", "recent",
+            "schema", "export", "questions"
+        ]
     )
-    
-    parser.add_argument('command', nargs='?', default='stats',
-                      choices=['stats', 'tables', 'views', 'students', 'sessions', 
-                              'recent', 'schema', 'export', 'sheets', 'questions'],
-                      help='Command to execute')
-    
-    parser.add_argument('--table', '-t', help='Table name (for schema and export commands)')
-    parser.add_argument('--output', '-o', default='exports', help='Output directory for exports')
-    
+    parser.add_argument("--table")
+    parser.add_argument("--output", default="exports")
+
     args = parser.parse_args()
-    
-    # Execute command
-    if args.command == 'stats':
+
+    if args.command == "stats":
         show_stats()
-    elif args.command == 'tables':
+    elif args.command == "tables":
         list_tables()
-    elif args.command == 'views':
+    elif args.command == "views":
         list_views()
-    elif args.command == 'students':
+    elif args.command == "students":
         show_students()
-    elif args.command == 'sessions':
-        show_sessions()
-    elif args.command == 'recent':
+    elif args.command == "keys":
+        show_answer_keys()
+    elif args.command == "recent":
         show_recent_grades()
-    elif args.command == 'schema':
+    elif args.command == "schema":
         show_schema(args.table)
-    elif args.command == 'export':
+    elif args.command == "export":
         if not args.table:
-            print("[ERROR] Please specify a table with --table")
-            sys.exit(1)
-        export_table(args.table, args.output)
-    elif args.command == 'sheets':
-        show_sheet_relationships()
-    elif args.command == 'questions':
+            print("[ERROR] --table required for export")
+        else:
+            export_table(args.table, args.output)
+    elif args.command == "questions":
         show_question_difficulty()
 
 

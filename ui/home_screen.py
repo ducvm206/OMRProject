@@ -39,10 +39,7 @@ class HomeScreen:
     def setup_window(self):
         """Configure main window"""
         self.root.title("Answer Sheet Grading System - Home")
-        
-        # Don't resize if already set by app
-        if not self.root.winfo_width() > 1:
-            self.root.geometry("900x700")
+        self.root.geometry("900x900")
         
         # Configure style
         style = ttk.Style()

@@ -1,6 +1,6 @@
 """
 Grading UI
-Pure UI components for grading answer sheets
+Pure UI components for grading answer sheets (updated to use new grading flow/result format)
 """
 import os
 import sys
@@ -53,7 +53,7 @@ class GradingUI:
     def setup_window(self):
         """Setup main window properties"""
         self.root.title("Grade Answer Sheets")
-        self.root.geometry("1400x850")
+        self.root.geometry("1500x1000")
         self.root.resizable(True, True)
         
         # Configure style
@@ -189,10 +189,19 @@ class GradingUI:
         tk.Label(inner, text="📈 Results",
                 font=("Segoe UI", 11, "bold"), bg=self.CARD_COLOR).pack(anchor="w", pady=(0, 10))
         
-        # Results text
-        self.results_text = tk.Text(inner, height=20, wrap=tk.WORD,
-                                   font=("Courier New", 9), bg="#fafafa", relief=tk.FLAT)
-        self.results_text.pack(fill=tk.BOTH, expand=True)
+        # Results text with scrollbar
+        text_frame = tk.Frame(inner, bg=self.CARD_COLOR)
+        text_frame.pack(fill=tk.BOTH, expand=True)
+        
+        scrollbar = tk.Scrollbar(text_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.results_text = tk.Text(text_frame, height=20, wrap=tk.WORD,
+                                   font=("Courier New", 10), bg="#fafafa", relief=tk.FLAT,
+                                   yscrollcommand=scrollbar.set)
+        self.results_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.results_text.yview)
+        
         self.results_text.insert("1.0", "Results will appear here after grading...")
         self.results_text.config(state=tk.DISABLED)
         
@@ -252,6 +261,7 @@ class GradingUI:
         
         if success:
             self.template_var.set(template_info['name'])
+            messagebox.showinfo("Success", f"Template loaded:\n{template_info['total_questions']} questions detected")
         else:
             messagebox.showerror("Error", f"Failed to load template:\n{error}")
     
@@ -272,6 +282,7 @@ class GradingUI:
         
         if success:
             self.key_var.set(key_info['name'])
+            messagebox.showinfo("Success", f"Answer key loaded:\n{key_info['exam_name']}\n{key_info['total_questions']} questions")
         else:
             messagebox.showerror("Error", f"Failed to load answer key:\n{error}")
     
@@ -311,19 +322,24 @@ class GradingUI:
         self.results_text.config(state=tk.DISABLED)
         self.root.update_idletasks()
         
-        success, error, result = self.flow.grade_single_sheet(image_path)
+        # call flow with partial_mcq = True as default optional (you can change)
+        success, error, result = self.flow.grade_single_sheet(image_path, partial_mcq=True)
         
         if success:
             self.display_single_result(result)
             self.nav_frame.pack_forget()
             
-            # Display the processed image with colored bubble outlines
+            # Display the processed image with colored bubble/box outlines
             processed_image = self.flow.get_processed_image()
             if processed_image is not None:
                 self._display_image_on_canvas(processed_image)
             else:
                 print("[UI] Warning: No processed image available")
         else:
+            self.results_text.config(state=tk.NORMAL)
+            self.results_text.delete("1.0", tk.END)
+            self.results_text.insert("1.0", f"ERROR: {error}")
+            self.results_text.config(state=tk.DISABLED)
             messagebox.showerror("Error", f"Grading failed:\n{error}")
     
     def grade_batch(self):
@@ -341,7 +357,7 @@ class GradingUI:
         self.results_text.config(state=tk.DISABLED)
         self.root.update_idletasks()
         
-        success, error, results = self.flow.grade_batch(folder_path)
+        success, error, results = self.flow.grade_batch(folder_path, partial_mcq=True)
         
         if success:
             batch_results, summary = results
@@ -349,54 +365,59 @@ class GradingUI:
             self.display_batch_result(0)
             self.nav_frame.pack(pady=(10, 0))
             
+            error_msg = ""
+            if summary.get('errors'):
+                error_msg = f"\n\nErrors: {len(summary['errors'])} sheets failed"
+            
             messagebox.showinfo("Batch Complete",
                 f"Batch grading complete!\n\n"
                 f"• {summary['total_sheets']} sheets graded\n"
-                f"• Average score: {summary['avg_score']:.1f}%\n"
-                f"• Use navigation to view results")
+                f"• Average score: {summary['avg_percentage']:.1f}%\n"
+                f"• Use navigation to view results{error_msg}")
         else:
+            self.results_text.config(state=tk.NORMAL)
+            self.results_text.delete("1.0", tk.END)
+            self.results_text.insert("1.0", f"ERROR: {error}")
+            self.results_text.config(state=tk.DISABLED)
             messagebox.showerror("Error", f"Batch grading failed:\n{error}")
     
     def display_single_result(self, result):
-        """Display single grading result"""
+        """Display single grading result using the exact format requested"""
         self.results_text.config(state=tk.NORMAL)
         self.results_text.delete("1.0", tk.END)
+
+        summary = result.get("summary", {})
+        score = summary.get("score", result.get("score", 0.0))
+        total_points = result.get("total_points", summary.get("mcq_points_total", 0.0) + summary.get("written_points_total", 0.0))
+
+        mcq_correct = summary.get("mcq_correct", 0)
+        mcq_total = summary.get("mcq_count", 0)
+        written_correct = summary.get("written_correct", 0)
+        written_total = summary.get("written_count", 0)
+
+        student_id = result.get("student_id", "N/A")
+
+        # Header + requested format
+        self.results_text.insert(tk.END, "=" * 50 + "\n", "header")
+        self.results_text.insert(tk.END, f"Student ID: {student_id}\n", "student_id")
+        self.results_text.insert(tk.END, "=" * 50 + "\n\n", "header")
         
-        # Header
-        self.results_text.insert(tk.END, "╔" + "═" * 48 + "╗\n", "header")
-        self.results_text.insert(tk.END, "GRADING RESULTS\n", "header")
-        self.results_text.insert(tk.END, "╚" + "═" * 48 + "╝\n\n", "header")
-        
-        # Student ID
-        self.results_text.insert(tk.END, f"Student ID: ", "label")
-        self.results_text.insert(tk.END, f"{result['student_id']}\n\n", "value")
-        
-        # Score
-        self.results_text.insert(tk.END, f"Score: ", "label")
-        self.results_text.insert(tk.END, f"{result['correct']}/{result['total_questions']}\n", "score")
-        
-        self.results_text.insert(tk.END, f"Percentage: ", "label")
-        self.results_text.insert(tk.END, f"{result['percentage']:.1f}%\n\n", "score")
-        
-        # Details
-        self.results_text.insert(tk.END, f"✓ Correct: ", "label")
-        self.results_text.insert(tk.END, f"{result['correct']}\n", "correct")
-        
-        self.results_text.insert(tk.END, f"✗ Wrong: ", "label")
-        self.results_text.insert(tk.END, f"{result['wrong']}\n", "wrong")
-        
-        self.results_text.insert(tk.END, f"○ Blank: ", "label")
-        self.results_text.insert(tk.END, f"{result['blank']}\n", "blank")
-        
+        self.results_text.insert(tk.END, f"Score: {score} / {total_points}\n\n", "score")
+        self.results_text.insert(tk.END, f"Multiple Choice Questions: {mcq_correct} / {mcq_total}\n")
+        self.results_text.insert(tk.END, f"Written Answer Questions: {written_correct} / {written_total}\n\n")
+
+        # Also show percentage and breakdown
+        self.results_text.insert(tk.END, f"Percentage: {summary.get('percentage', result.get('percentage', 0.0)):.2f}%\n\n")
+
+        # Small detailed counts
+        self.results_text.insert(tk.END, f"MCQ - correct: {mcq_correct}, incorrect: {summary.get('mcq_incorrect',0)}, partial: {summary.get('mcq_partial',0)}, blank: {summary.get('mcq_blank',0)}\n")
+        self.results_text.insert(tk.END, f"Written - correct: {written_correct}, incorrect: {summary.get('written_incorrect',0)}, blank: {summary.get('written_blank',0)}\n")
+
         # Configure tags
-        self.results_text.tag_config("header", font=("Courier New", 9, "bold"))
-        self.results_text.tag_config("label", font=("Courier New", 9, "bold"))
-        self.results_text.tag_config("value", font=("Courier New", 9))
-        self.results_text.tag_config("score", font=("Courier New", 10, "bold"), foreground="blue")
-        self.results_text.tag_config("correct", foreground="green")
-        self.results_text.tag_config("wrong", foreground="red")
-        self.results_text.tag_config("blank", foreground="orange")
-        
+        self.results_text.tag_config("header", font=("Courier New", 10, "bold"))
+        self.results_text.tag_config("student_id", font=("Courier New", 11, "bold"), foreground="darkblue")
+        self.results_text.tag_config("score", font=("Courier New", 12, "bold"), foreground="blue")
+
         self.results_text.config(state=tk.DISABLED)
     
     def _display_image_on_canvas(self, image_array):

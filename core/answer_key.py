@@ -140,7 +140,7 @@ def create_answer_key_from_scan(template_info, master_sheet_path, threshold_perc
     print(f"Scanning master answer sheet: {master_sheet_path}")
     
     # Import here to avoid circular dependency
-    from extraction import BubbleTemplate, AnswerExtractor
+    from core.answer_extraction.bubble_answer_extraction import BubbleTemplate, AnswerExtractor
     
     # Load template
     template = BubbleTemplate(template_info['template_path'])

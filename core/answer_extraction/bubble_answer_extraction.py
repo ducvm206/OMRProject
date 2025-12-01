@@ -2,6 +2,7 @@
 extraction.py - Combined Answer and Student ID Extraction (FIXED)
 
 Fixed: Filters out square alignment markers from student ID detection
+Fixed: Handles missing metadata keys gracefully
 """
 
 import cv2
@@ -99,17 +100,19 @@ class BubbleTemplate:
                 self.template_height = first_page_data['image_dimensions']['height']
     
     def load_template(self, json_path):
-        """Load template from JSON file"""
+        """Load template JSON and validate structure"""
         if not os.path.exists(json_path):
             raise FileNotFoundError(f"Template not found: {json_path}")
-        
+
         with open(json_path, 'r', encoding='utf-8') as f:
             template_data = json.load(f)
-        
+
         print(f"[LOADED] Template: {json_path}")
-        print(f"  Total pages: {template_data['metadata']['total_pages']}")
-        print(f"  Total questions: {template_data['metadata']['total_questions']}")
-        
+
+        md = template_data.get("metadata", {})
+        print(f"  Total pages: {md.get('total_pages', 'Unknown')}")
+        print(f"  Extraction type: {md.get('extraction_type', 'Unknown')}")
+
         return template_data
     
     def get_page_data(self, page_num):
@@ -118,83 +121,88 @@ class BubbleTemplate:
         return self.template_data.get(page_key)
     
     def extract_questions(self):
-        """Extract all questions from template into Question objects"""
+        """Extract questions from bubble_answers structure"""
         questions = []
-        
+
         for page_key in sorted(self.template_data.keys()):
-            if page_key.startswith('page_'):
-                page_data = self.template_data[page_key]
-                
-                for question_data in page_data['questions']:
-                    bubbles = []
-                    for bubble_data in question_data['bubbles']:
-                        bubble = Bubble(
-                            label=bubble_data['label'],
-                            x=bubble_data['x'],
-                            y=bubble_data['y'],
-                            radius=bubble_data['radius']
-                        )
-                        bubbles.append(bubble)
-                    
-                    question = Question(
-                        question_number=question_data['question_number'],
-                        bubbles=bubbles,
-                        bounding_box=question_data['bounding_box']
-                    )
-                    questions.append(question)
-        
+            if not page_key.startswith("page_"):
+                continue
+
+            page = self.template_data[page_key]
+
+            # NEW — look inside bubble_answers
+            bubble_answers = page.get("bubble_answers")
+            if not bubble_answers:
+                continue
+
+            q_list = bubble_answers.get("questions", [])
+            for q in q_list:
+                bubbles = [
+                    Bubble(label=b['label'], x=b['x'], y=b['y'], radius=b['radius'])
+                    for b in q["bubbles"]
+                ]
+
+                question = Question(
+                    question_number=q["question_number"],
+                    bubbles=bubbles,
+                    bounding_box=q.get("bounding_box")
+                )
+                questions.append(question)
+
         return questions
+
     
     def extract_id_template(self):
-        """Extract student ID template from first page - FIXED to filter square markers"""
-        page_data = self.template_data.get('page_1')
-        if not page_data:
+        """Extract student ID bubble template from new JSON structure"""
+        page1 = self.template_data.get("page_1")
+        if not page1:
+            print("[INFO] No page_1 found in template")
             return None
-        
-        id_data = page_data.get('student_id')
+
+        bubble_answers = page1.get("bubble_answers")
+        if not bubble_answers:
+            print("[INFO] No bubble_answers found")
+            return None
+
+        id_data = bubble_answers.get("student_id")
         if not id_data:
-            print("[INFO] No student_id found in template")
+            print("[INFO] No student_id structure found")
             return None
-        
-        template_width = page_data['image_dimensions']['width']
-        template_height = page_data['image_dimensions']['height']
-        
-        # FIX: Filter out columns that are actually square markers
-        # Square markers typically have only 1 bubble or have 'marker' in some field
+
+        columns = id_data.get("digit_columns", [])
         valid_columns = []
-        for column in id_data['digit_columns']:
-            # Skip if column has only 1 bubble (likely a square marker)
-            if len(column['bubbles']) <= 1:
-                print(f"[FILTERED] Skipping column at position {column['digit_position']} - only {len(column['bubbles'])} bubble(s)")
+
+        for column in columns:
+            bubbles = column.get("bubbles", [])
+
+            # Must have 10 digits per column
+            if len(bubbles) != 10:
+                print(f"[FILTER] Skip column pos {column.get('digit_position')} — requires 10 bubbles")
                 continue
-            
-            # Skip if all bubbles have the same digit (not a valid ID column)
-            unique_digits = set(b['digit'] for b in column['bubbles'])
-            if len(unique_digits) <= 1:
-                print(f"[FILTERED] Skipping column at position {column['digit_position']} - not enough unique digits")
+
+            # Must contain digits 0–9 exactly
+            digits = sorted([b.get("digit") for b in bubbles])
+            if digits != list(range(10)):
+                print(f"[FILTER] Skip column pos {column.get('digit_position')} — digits not 0–9")
                 continue
-            
-            # Skip if bubbles don't represent digits 0-9
-            if not all(isinstance(b['digit'], int) and 0 <= b['digit'] <= 9 for b in column['bubbles']):
-                print(f"[FILTERED] Skipping column at position {column['digit_position']} - invalid digit values")
-                continue
-            
+
             valid_columns.append(column)
-        
+
         if not valid_columns:
-            print("[WARNING] No valid ID columns found after filtering")
+            print("[WARNING] No valid student ID columns found")
             return None
-        
-        id_template = {
-            'template_width': template_width,
-            'template_height': template_height,
-            'total_digits': len(valid_columns),  # Use actual valid column count
-            'digit_columns': valid_columns
+
+        width = page1["image_dimensions"]["width"]
+        height = page1["image_dimensions"]["height"]
+
+        print(f"[INFO] ID Template OK: {len(valid_columns)} columns")
+
+        return {
+            "template_width": width,
+            "template_height": height,
+            "total_digits": len(valid_columns),
+            "digit_columns": valid_columns
         }
-        
-        print(f"[INFO] ID Template: {id_template['total_digits']} valid digit columns (filtered from {len(id_data['digit_columns'])} total)")
-        
-        return id_template
 
 
 class AnswerSheetExtractor:

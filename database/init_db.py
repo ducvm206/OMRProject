@@ -1,7 +1,10 @@
 """
-Database Initialization Script
-Creates and initializes the grading system database with the new schema
+Database Initialization Script (updated)
+Creates and initializes the grading system database with the new schema.
+This version matches the updated schema where MCQ/written counts are determined
+during answer key creation based on max total points for each part.
 """
+
 import os
 import sys
 import sqlite3
@@ -105,8 +108,11 @@ def create_database(force_recreate=False):
         print(f"\nTables created:")
         for table in tables:
             if not table.startswith('sqlite_'):
-                cursor.execute(f"SELECT COUNT(*) FROM {table}")
-                count = cursor.fetchone()[0]
+                try:
+                    cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                    count = cursor.fetchone()[0]
+                except sqlite3.Error:
+                    count = 'n/a'
                 print(f"  - {table:20s} ({count} records)")
         
         # Verify views
@@ -207,7 +213,7 @@ def verify_database_integrity():
 
 
 def insert_sample_data():
-    """Insert sample data for testing (optional)"""
+    """Insert sample data for testing (updated for new schema)"""
     db_path = get_db_path()
     
     try:
@@ -219,41 +225,55 @@ def insert_sample_data():
         # Sample sheet
         cursor.execute("""
             INSERT INTO sheets (file_path, name, notes)
-            VALUES ('blank_sheets/sample_40q.pdf', 'Sample 40 Question Sheet', 'Sample sheet for testing')
+            VALUES ('blank_sheets/sample_mixed.pdf', 'Sample Mixed Question Sheet', 
+                    'Sample sheet with MCQ and written questions')
         """)
         sheet_id = cursor.lastrowid
         
         # Sample template (with template_info JSON)
+        # NOTE: multiple_choice_questions and written_answer_questions are set to 0
+        # They will be determined during answer key creation
         import json
         template_data = {
             'page_1': {
-                'total_questions': 40,
-                'questions': [{'question_number': i, 'bubbles': []} for i in range(1, 41)],
+                'questions': [{'question_number': i, 'bubbles': []} for i in range(1, 51)],
                 'student_id': {'digit_columns': []}
             }
         }
         
         cursor.execute("""
-            INSERT INTO templates (sheet_id, name, json_path, template_info, total_questions, has_student_id)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (sheet_id, 'Sample Template 40Q', 'template/sample_40q.json', 
-              json.dumps(template_data), 40, 1))
+            INSERT INTO templates (sheet_id, name, json_path, template_info, 
+                                   multiple_choice_questions, written_answer_questions, has_student_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (sheet_id, 'Sample Template 50Q', 'template/sample_50q.json', 
+              json.dumps(template_data), 0, 0, 1))
         template_id = cursor.lastrowid
         
-        # Sample answer key (with key_info JSON)
+        # Sample answer key with MCQ (Q1-40) and written (Q41-50)
+        # User specified: MCQ max points = 40, Written max points = 10
+        # This means 40 MCQ questions and 10 written questions
         key_data = {
             'metadata': {
-                'exam_name': 'Sample Exam',
-                'total_questions': 40
+                'exam_name': 'Sample Mixed Exam',
+                'total_mcq_questions': 40,
+                'mcq_max_points': 40
             },
             'answer_key': {str(i): ['A'] for i in range(1, 41)}
         }
         
+        written_key_data = {
+            'metadata': {
+                'total_written_questions': 10,
+                'written_max_points': 10
+            },
+            'answer_key': {str(i): 5 for i in range(41, 51)}  # Q41-50, each answer is 5
+        }
+        
         cursor.execute("""
-            INSERT INTO answer_keys (template_id, name, json_path, key_info, created_by)
-            VALUES (?, ?, ?, ?, ?)
-        """, (template_id, 'Sample Answer Key', 'answer_keys/sample_key.json',
-              json.dumps(key_data), 'manual'))
+            INSERT INTO answer_keys (template_id, name, json_path, key_info, written_key_info, created_by)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (template_id, 'Sample Answer Key (Mixed)', 'answer_keys/sample_mixed_key.json',
+              json.dumps(key_data), json.dumps(written_key_data), 'manual'))
         key_id = cursor.lastrowid
         
         # Sample students
@@ -269,39 +289,68 @@ def insert_sample_data():
                 VALUES (?, ?, ?)
             """, (student_id, name, class_name))
         
-        # Sample graded sheets
+        # Sample graded sheets - updated structure:
+        # The counts are determined from the answer key:
+        # - total_mcq_questions = 40 (from key_data)
+        # - total_written_questions = 10 (from written_key_data)
         graded_data = [
-            (key_id, 'S001', 'Sample Exam', 'filled_sheets/s001.png', 38, 40, 95.0, 38, 2, 0, 50),
-            (key_id, 'S002', 'Sample Exam', 'filled_sheets/s002.png', 35, 40, 87.5, 35, 4, 1, 50),
-            (key_id, 'S003', 'Sample Exam', 'filled_sheets/s003.png', 40, 40, 100.0, 40, 0, 0, 50)
+            # S001: 38/40 MCQ correct, 8/10 written correct
+            (key_id, 'S001', 'Sample Mixed Exam', 'filled_sheets/s001.png', 
+             40, 10, 38, 2, 0, 8, 2, 0, 50),
+            # S002: 35/40 MCQ (4 wrong, 1 blank), 7/10 written (2 wrong, 1 blank)
+            (key_id, 'S002', 'Sample Mixed Exam', 'filled_sheets/s002.png', 
+             40, 10, 35, 4, 1, 7, 2, 1, 50),
+            # S003: perfect score
+            (key_id, 'S003', 'Sample Mixed Exam', 'filled_sheets/s003.png', 
+             40, 10, 40, 0, 0, 10, 0, 0, 50)
         ]
         
         for data in graded_data:
             cursor.execute("""
-                INSERT INTO graded_sheets 
-                (key_id, student_id, exam_name, filled_sheet_path, score, total_questions,
-                 percentage, correct_count, wrong_count, blank_count, threshold_used)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO graded_sheets (
+                    key_id, student_id, exam_name, filled_sheet_path,
+                    total_mcq_questions, total_written_questions,
+                    mcq_correct_count, mcq_wrong_count, mcq_blank_count,
+                    written_correct_count, written_wrong_count, written_blank_count,
+                    threshold_used
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, data)
             graded_sheet_id = cursor.lastrowid
             
-            # Add some question results
-            for q_num in range(1, 6):  # Just first 5 questions
-                is_correct = q_num <= data[6]  # correct_count
+            # Add some question results (first 5 MCQ + first 3 written)
+            mcq_correct = data[6]
+            written_correct = data[9]
+            
+            # MCQ results (Q1-5)
+            for q_num in range(1, 6):
+                is_correct = 1 if q_num <= mcq_correct else 0
                 cursor.execute("""
                     INSERT INTO question_results
-                    (graded_sheet_id, question_number, student_answer, correct_answer, is_correct)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (graded_sheet_id, q_num, 'A', 'A', is_correct))
+                    (graded_sheet_id, question_number, question_type, student_answer, correct_answer, is_correct)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (graded_sheet_id, q_num, 'mcq', 'A', 'A', is_correct))
+            
+            # Written results (Q41-43)
+            for q_num in range(41, 44):
+                is_correct = 1 if (q_num - 40) <= written_correct else 0
+                cursor.execute("""
+                    INSERT INTO question_results
+                    (graded_sheet_id, question_number, question_type, student_answer, correct_answer, is_correct)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (graded_sheet_id, q_num, 'written', '5', '5', is_correct))
         
         conn.commit()
         
         print(f"[SUCCESS] Sample data inserted:")
         print(f"  - 1 sheet")
         print(f"  - 1 template")
-        print(f"  - 1 answer key")
+        print(f"  - 1 answer key (40 MCQ + 10 written)")
         print(f"  - {len(students)} students")
         print(f"  - {len(graded_data)} graded sheets")
+        print(f"\n[NOTE] MCQ and written question counts are determined from answer key creation")
+        print(f"        MCQ: 40 questions (max 40 points)")
+        print(f"        Written: 10 questions (max 10 points)")
         
         conn.close()
         
@@ -434,7 +483,7 @@ def main():
         print("DATABASE INITIALIZATION COMPLETE")
         print("=" * 70)
         print(f"\nDatabase ready at: {get_db_path()}")
-        print("\nYou can now:")
+        print("\nYou can now:") 
         print("  1. Run the application: python app.py")
         print("  2. Create answer keys: python ui/key_ui.py")
         print("  3. Generate sheets: python ui/sheet_ui.py")

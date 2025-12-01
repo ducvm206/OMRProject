@@ -45,15 +45,21 @@ class AnswerSheetDesigner:
             'id_bubble_radius': 7,
             'id_bubble_spacing': 20,
             'id_row_spacing': 22,
+            'include_quick_numbers': True,
+            'quick_number_boxes': 4,
+            'quick_number_width': 120,
+            'quick_number_height': 25,
+            'quick_number_spacing': 8,
+            'quick_number_start_from_mc': True,  # If True, numbering continues from MC questions
+            'qn_marker_size': 10,  # Corner markers for quick number section
             'id_marker_size': 10  # Size of corner markers
         }
-        
-        # Predefined presets
+
         self.presets = {
-            10: {'columns': 2, 'max_questions_per_column': 15, 'questions_per_page': 30, 'row_spacing': 40},
-            20: {'columns': 2, 'max_questions_per_column': 18, 'questions_per_page': 36, 'row_spacing': 35},
-            30: {'columns': 3, 'max_questions_per_column': 18, 'questions_per_page': 54, 'row_spacing': 35},
-            40: {'columns': 3, 'max_questions_per_column': 18, 'questions_per_page': 54, 'row_spacing': 35}
+        10: {'columns': 2, 'max_questions_per_column': 15, 'questions_per_page': 30, 'row_spacing': 35},
+        20: {'columns': 2, 'max_questions_per_column': 20, 'questions_per_page': 40, 'row_spacing': 35},
+        30: {'columns': 3, 'max_questions_per_column': 20, 'questions_per_page': 40, 'row_spacing': 35},
+        40: {'columns': 3, 'max_questions_per_column': 20, 'questions_per_page': 40, 'row_spacing': 35}
         }
         
         # Register Lato fonts for PDF
@@ -73,6 +79,11 @@ class AnswerSheetDesigner:
     
     def apply_preset(self, total_questions):
         """Apply preset configuration based on number of questions"""
+        # If no presets defined or empty, skip
+        if not self.presets:
+            print("No presets available, using default configuration")
+            return
+        
         # Find the closest preset
         preset_keys = sorted(self.presets.keys())
         for key in preset_keys:
@@ -93,19 +104,24 @@ class AnswerSheetDesigner:
             if key in self.design_config:
                 self.design_config[key] = value
     
-    def create_answer_sheet(self, total_questions, output_path, format='pdf', use_preset=True):
+    def create_answer_sheet(self, total_questions, output_path, format='pdf', use_preset=True, quick_number_boxes=None):
         """Create a complete answer sheet design"""
+        
+        # Validate total questions
+        total_questions = min(total_questions, 40)
         
         # Apply preset if enabled
         if use_preset:
             self.apply_preset(total_questions)
         
+        # Override quick number boxes if provided
+        if quick_number_boxes is not None:
+            self.design_config['quick_number_boxes'] = quick_number_boxes
+        
         if format.lower() == 'pdf':
             self._create_pdf_sheet(total_questions, output_path)
         else:
             self._create_image_sheet(total_questions, output_path, format)
-        
-        print(f"Answer sheet created: {output_path}")
     
     def _create_pdf_sheet(self, total_questions, output_path):
         """Create PDF answer sheet with Lato font"""
@@ -129,6 +145,8 @@ class AnswerSheetDesigner:
             # Draw Student ID section on first page
             if page == 0 and self.design_config['include_student_id']:
                 self._draw_pdf_student_id(c, page_width, page_height)
+            if self.design_config['include_quick_numbers']:
+                self._draw_pdf_quick_numbers(c, page_width, page_height)
         
         c.save()
     
@@ -144,13 +162,13 @@ class AnswerSheetDesigner:
             c.drawString(margins['left'], page_height - margins['top'] - 10, "ANSWER SHEET")
             
             c.setFont(font_regular, 9)
-            c.drawString(page_width - margins['right'] - 40, page_height - margins['top'] - 10, 
-                        f"Page {current_page}/{total_pages}")
+            #c.drawString(page_width - margins['right'] - 40, page_height - margins['top'] - 10, 
+            #            f"Page {current_page}/{total_pages}")
             
             c.setFont(font_regular, 9)
             info_y = page_height - margins['top'] - 30
-            c.drawString(margins['left'], info_y, "Name: ____________________________")
-            c.drawString(margins['left'] + 180, info_y, "Date: ______________")
+            c.drawString(margins['left'], info_y, "Name: __________________________________________")
+            c.drawString(margins['left'] + 180, info_y, "Date: ___________________")
             
             if self.design_config['include_instructions']:
                 c.setFont(font_regular, 7)
@@ -215,6 +233,76 @@ class AnswerSheetDesigner:
         box_x2 = start_x + id_section_width - 20
         box_y2 = start_y + 20
     
+        
+        # Draw BLACK SQUARE MARKERS at four corners
+        c.setFillColorRGB(0, 0, 0)
+        
+        # Top-left marker
+        c.rect(box_x1 - marker_size/2, box_y2 - marker_size/2, marker_size, marker_size, stroke=0, fill=1)
+        
+        # Top-right marker
+        c.rect(box_x2 - marker_size/2, box_y2 - marker_size/2, marker_size, marker_size, stroke=0, fill=1)
+        
+        # Bottom-left marker
+        c.rect(box_x1 - marker_size/2, box_y1 - marker_size/2, marker_size, marker_size, stroke=0, fill=1)
+        
+        # Bottom-right marker
+        c.rect(box_x2 - marker_size/2, box_y1 - marker_size/2, marker_size, marker_size, stroke=0, fill=1)
+
+    def _draw_pdf_quick_numbers(self, c, page_width, page_height):
+        """Draw Quick Number Answer boxes above Student ID section"""
+        margins = self.design_config['margins']
+        font_bold = "Lato-Bold" if self.pdf_font_registered else "Helvetica-Bold"
+        
+        num_boxes = self.design_config['quick_number_boxes']
+        box_width = self.design_config['quick_number_width']
+        box_height = self.design_config['quick_number_height']
+        box_spacing = self.design_config['quick_number_spacing']
+        marker_size = self.design_config['qn_marker_size']
+        
+        # Calculate Student ID section height to position above it
+        id_section_height = 10 * self.design_config['id_row_spacing'] + 50
+        
+        # Calculate quick number section dimensions
+        qn_section_height = num_boxes * (box_height + box_spacing) + 40
+        qn_section_width = box_width + 80
+        
+        # Position above Student ID section
+        start_x = page_width - margins['right'] - qn_section_width - 10
+        start_y = margins['bottom'] + id_section_height + qn_section_height + 50
+        
+        # Draw title
+        c.setFont(font_bold, 10)
+        c.drawString(start_x + 20, start_y + 4, "QUICK ANSWERS")
+        
+        # Determine starting number
+        if self.design_config['quick_number_start_from_mc']:
+            # This would need to be passed as parameter - for now use fixed approach
+            start_num = 1
+        else:
+            start_num = 1
+        
+        # Draw numbered boxes
+        for i in range(num_boxes):
+            box_num = start_num + i
+            box_y = start_y - 30 - i * (box_height + box_spacing)
+            
+            # Draw rectangle box FIRST
+            c.setStrokeColorRGB(0, 0, 0)
+            c.setLineWidth(1)
+            c.setFillColorRGB(1, 1, 1)
+            c.rect(start_x + 30, box_y - box_height, box_width, box_height, stroke=1, fill=0)
+            
+            # Draw box number - FORCE black color and reset font each time
+            c.setFillColorRGB(0, 0, 0)  # Force black text
+            c.setFont(font_bold, 15)
+            c.drawString(start_x + 10, box_y - box_height/2 - 5, f"{box_num}.")
+        
+        # Calculate border box coordinates for corner markers
+        box_x1 = start_x + 5
+        box_y1 = start_y - 30 - (num_boxes - 1) * (box_height + box_spacing) - box_height - 30
+        box_x2 = start_x + qn_section_width - 20
+        box_y2 = start_y + 5
         
         # Draw BLACK SQUARE MARKERS at four corners
         c.setFillColorRGB(0, 0, 0)
@@ -356,6 +444,8 @@ class AnswerSheetDesigner:
         # Draw Student ID section
         if self.design_config['include_student_id']:
             self._draw_image_student_id(draw, width, height, scale, font_bold, font_small, font_tiny)
+        if self.design_config['include_quick_numbers']:
+            self._draw_image_quick_numbers(draw, width, height, scale, font_bold, font_small)
         
         # Convert back to OpenCV format and save
         if format.lower() == 'jpg':
@@ -563,10 +653,8 @@ if __name__ == "__main__":
         'bold': 'Lato-Bold.ttf'
     })
     
-    # Test different presets
-    print("\n=== Testing Presets ===")
-    
-    # 10 questions preset
-    designer.create_answer_sheet(32, 'answer_sheet_40.pdf', format='pdf')
+    # Test with fewer questions
+    designer.create_answer_sheet(20, 'test_sheet_20.pdf', format='pdf', quick_number_boxes=5)
+    print("PDF created: test_sheet_20.pdf")
 
     
