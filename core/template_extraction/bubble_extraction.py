@@ -6,6 +6,40 @@ import json
 from datetime import datetime
 from PIL import Image
 
+
+# -----------------------------------------------------------------------------
+# Marker size defaults (in POINTS)
+# -----------------------------------------------------------------------------
+ID_MARKER_PT = 10   # student ID marker printed size in points (pt)
+QA_MARKER_PT = 9   # quick answers marker printed size in points (pt)
+KEY_MARKER_PT = 7   # key marker printed size in points (pt) - CHANGED FROM 7 to 8
+MARKER_TOLERANCE = 0.1  # ± tolerance fraction when matching printed marker size
+
+def fit_to_screen(image, max_height=1000):
+    """
+    Resize image to fit screen while maintaining aspect ratio
+    
+    Args:
+        image: Input image (BGR)
+        max_height: Maximum height in pixels
+        
+    Returns:
+        Resized image
+    """
+    height, width = image.shape[:2]
+    
+    if height <= max_height:
+        return image
+    
+    scale = max_height / height
+    new_width = int(width * scale)
+    new_height = int(height * scale)
+    
+    resized = cv2.resize(image, (new_width, new_height))
+    return resized
+# -----------------------------------------------------------------------------
+# PDF -> PNG conversion
+# -----------------------------------------------------------------------------
 def convert_pdf_to_png(pdf_path, output_folder='pdf_converted', dpi=300):
     """
     Convert all pages of a PDF to PNG images using PyMuPDF
@@ -53,138 +87,267 @@ def convert_pdf_to_png(pdf_path, output_folder='pdf_converted', dpi=300):
         raise
 
 
-def detect_corner_markers(image, show_debug=True):
+# -----------------------------------------------------------------------------
+# Utility: points -> pixels conversion
+# -----------------------------------------------------------------------------
+def points_to_pixels(points, dpi):
     """
-    Detect the 4 black square corner markers that define the Student ID region
+    Convert PDF points (pt) to pixels using DPI.
+    1 pt = 1/72 inch, so pixels = points * dpi / 72
+    """
+    return (points * dpi) / 72.0
+
+
+# -----------------------------------------------------------------------------
+# New: DPI-aware corner marker detection (expects marker size in points)
+# -----------------------------------------------------------------------------
+def detect_corner_markers_by_expected_size(
+    image,
+    expected_size_pt,
+    dpi=300,
+    tolerance=MARKER_TOLERANCE,
+    show_debug=True,
+    section_name="Region"
+):
+    """
+    Detect 4 corner markers based on expected printed size in POINTS.
+    STRICT criteria: markers are SOLID BLACK SQUARES with NO hollow space.
+    Expects EXACTLY 4 markers arranged in a rectangle.
+    Returns (x_min, y_min, x_max, y_max) or None.
+    """
+    expected_px = points_to_pixels(expected_size_pt, dpi)
+    min_size = expected_px * (1 - tolerance)  # ±25% tolerance
+    max_size = expected_px * (1 + tolerance)
     
-    Args:
-        image: Input image (BGR)
-        show_debug: If True, show debug visualization
-        
-    Returns:
-        Bounding box (x_min, y_min, x_max, y_max) of ID region, or None if not found
-    """
+    # Aggressive area filtering
+    min_area = (min_size ** 2) * 0.75
+    max_area = (max_size ** 2) * 1.25
+
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     _, thresh = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY_INV)
-    
-    # Find contours
+
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    # Look for square-shaped contours (corner markers)
     markers = []
     debug_img = image.copy() if show_debug else None
-    
-    print(f"\n[DEBUG] Analyzing {len(contours)} contours for corner markers...")
-    
+
+    print(f"\n[DEBUG] {section_name} detection: expected {expected_size_pt}pt → {expected_px:.1f}px, "
+          f"range [{min_size:.1f}px, {max_size:.1f}px], area range [{min_area:.1f}, {max_area:.1f}]")
+    print(f"[DEBUG] Analyzing {len(contours)} contours for {section_name} corner markers...")
+    print(f"[DEBUG] STRICT CRITERIA: Solid black squares ONLY (no letters/text)")
+
     for cnt in contours:
         area = cv2.contourArea(cnt)
         
-        # Adjust this range based on your actual corner marker size
-        # Try different values: 200-1000, 300-2000, etc.
-        if 200 < area < 2000:
-            x, y, w, h = cv2.boundingRect(cnt)
-            aspect_ratio = float(w) / h if h > 0 else 0
+        # Step 1: Area filtering
+        if area < min_area or area > max_area:
+            continue
+
+        x, y, w, h = cv2.boundingRect(cnt)
+        
+        # Step 2: Size range check - require bounding box dims to be close to expected size
+        if not (min_size <= w <= max_size and min_size <= h <= max_size):
+            continue
+
+        # Step 3: STRICT aspect ratio for perfect squares
+        aspect_ratio = float(w) / h if h > 0 else 0
+        if not (0.88 < aspect_ratio < 1.12):
+            continue
+
+        # Step 4: Corner detection - markers have sharp 90-degree corners, letters don't
+        epsilon = 0.02 * cv2.arcLength(cnt, True)
+        approx = cv2.approxPolyDP(cnt, epsilon, True)
+        
+        # Markers should approximate to exactly 4 corners
+        if len(approx) != 4:
+            continue  # Not a rectangle/square, likely a letter
+        
+        # Check corners are roughly 90 degrees (strict)
+        corners_valid = True
+        for i in range(4):
+            pt1 = approx[i][0].astype(float)
+            pt2 = approx[(i+1) % 4][0].astype(float)
+            pt3 = approx[(i+2) % 4][0].astype(float)
             
-            # More strict square requirement
-            if 0.85 < aspect_ratio < 1.15:
-                # Check if it's filled (dark)
-                mask = np.zeros(gray.shape, dtype=np.uint8)
-                cv2.drawContours(mask, [cnt], -1, 255, -1)
-                mean_val = cv2.mean(gray, mask=mask)[0]
+            v1 = pt2 - pt1
+            v2 = pt3 - pt2
+            dot = np.dot(v1, v2)
+            
+            # Dot product should be near 0 for 90-degree angles
+            # Stricter check: reject angles far from 90 degrees
+            if abs(dot) > 500:  # Very strict - markers must have near-perfect corners
+                corners_valid = False
+                break
+        
+        if not corners_valid:
+            continue
+
+        # Step 5: DARKNESS CHECK - VERY STRICT for solid black
+        mask = np.zeros(gray.shape, dtype=np.uint8)
+        cv2.drawContours(mask, [cnt], -1, 255, -1)
+        mean_val = cv2.mean(gray, mask=mask)[0]
+        
+        # Require VERY dark - solid black markers only
+        if mean_val > 50:  # Much stricter - markers must be very dark
+            continue
+
+        # Step 6: SOLIDITY CHECK - interior must be uniformly dark (no hollow centers like letters)
+        inner_margin = 3  # pixels from edge
+        if w > inner_margin * 2 and h > inner_margin * 2:
+            inner_x1 = max(0, x + inner_margin)
+            inner_x2 = min(gray.shape[1], x + w - inner_margin)
+            inner_y1 = max(0, y + inner_margin)
+            inner_y2 = min(gray.shape[0], y + h - inner_margin)
+            
+            if inner_x2 > inner_x1 and inner_y2 > inner_y1:
+                inner_region = gray[inner_y1:inner_y2, inner_x1:inner_x2]
+                inner_mean = np.mean(inner_region)
                 
-                # Should be very dark (corner markers are solid black)
-                if mean_val < 60:
-                    # Check it's actually rectangular (not circular like bubbles)
-                    rect_area = w * h
-                    fill_ratio = area / rect_area if rect_area > 0 else 0
-                    
-                    # Rectangles fill their bounding box more than circles do
-                    # Circles fill ~78% (π/4), rectangles fill ~100%
-                    if fill_ratio > 0.85:
-                        center_x = x + w // 2
-                        center_y = y + h // 2
-                        markers.append((center_x, center_y, area, w, h))
-                        print(f"  Found candidate: area={area}, size={w}x{h}, "
-                              f"aspect={aspect_ratio:.2f}, darkness={mean_val:.1f}, "
-                              f"fill={fill_ratio:.2f}")
-                        
-                        if show_debug:
-                            cv2.rectangle(debug_img, (x, y), (x+w, y+h), (0, 255, 0), 2)
-                            cv2.circle(debug_img, (center_x, center_y), 5, (0, 255, 0), -1)
-    
-    print(f"\n[INFO] Found {len(markers)} corner marker candidates")
-    
-    # Need exactly 4 markers (or at least 4)
-    if len(markers) < 4:
-        print(f"[WARNING] Found only {len(markers)} corner markers (need 4 for ID region)")
+                # Interior must also be very dark (no hollow centers)
+                if inner_mean > 80:
+                    continue  # Reject - has hollow interior (letter)
+                
+                # Step 7: UNIFORMITY CHECK - markers are uniform, letters have structure variation
+                inner_std = np.std(inner_region)
+                if inner_std > 40:
+                    continue  # Reject - too much variation (letter structure)
+
+        # Step 8: FILL RATIO - marker must be very solid
+        rect_area = w * h
+        fill_ratio = area / rect_area if rect_area > 0 else 0
+        
+        # Markers should be very filled (0.9+), not sparse like text strokes
+        if fill_ratio < 0.9:
+            continue  # Too sparse - likely not a solid marker
+
+        center_x = x + w // 2
+        center_y = y + h // 2
+        markers.append((center_x, center_y, w, h, area, x, y, fill_ratio, mean_val))
+
         if show_debug and debug_img is not None:
-            cv2.imshow('Corner Marker Detection - FAILED', debug_img)
+            cv2.rectangle(debug_img, (x, y), (x+w, y+h), (0, 255, 0), 2)
+            cv2.circle(debug_img, (center_x, center_y), 4, (0, 255, 0), -1)
+
+    print(f"[INFO] {section_name}: Found {len(markers)} marker candidates (after STRICT filtering)")
+    
+    if markers:
+        for i, (cx, cy, w, h, a, x, y, fr, mv) in enumerate(markers):
+            print(f"  Marker {i+1}: pos=({x},{y}), size={w}x{h}, fill_ratio={fr:.3f}, mean_val={mv:.1f}")
+
+    # REQUIRE EXACTLY 4 markers (no fallback, no tolerance)
+    if len(markers) != 4:
+        print(f"[ERROR] {section_name}: Expected EXACTLY 4 markers, found {len(markers)}")
+        print(f"[HINT] Ensure marker region has 4 solid black squares with no text overlapping")
+        if show_debug and debug_img is not None:
+            cv2.putText(debug_img, f"{section_name} - FAILED: Found {len(markers)}/4 markers", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            resized = fit_to_screen(debug_img, max_height=1000)
+            cv2.imshow(f'{section_name} Corner Marker Detection - FAILED', resized)
             cv2.waitKey(0)
             cv2.destroyAllWindows()
         return None
+
+    markers_sorted = markers  # Already have exactly 4
     
-    # Take the 4 largest markers
-    markers_sorted = sorted(markers, key=lambda m: m[2], reverse=True)[:4]
+    # Extract coordinates (use top-left corner + dimensions for actual bounds)
+    xs_centers = [m[0] for m in markers_sorted]
+    ys_centers = [m[1] for m in markers_sorted]
+    xs_left = [m[5] for m in markers_sorted]
+    ys_top = [m[6] for m in markers_sorted]
+    widths = [m[2] for m in markers_sorted]
+    heights = [m[3] for m in markers_sorted]
     
-    xs = [m[0] for m in markers_sorted]
-    ys = [m[1] for m in markers_sorted]
-    
-    x_min, x_max = min(xs), max(xs)
-    y_min, y_max = min(ys), max(ys)
-    
-    # Validate that markers form a proper rectangle
+    # Region bounds from outer edges of markers
+    x_min = min(xs_left)
+    y_min = min(ys_top)
+    x_max = max([xs_left[i] + widths[i] for i in range(len(markers_sorted))])
+    y_max = max([ys_top[i] + heights[i] for i in range(len(markers_sorted))])
+
     x_range = x_max - x_min
     y_range = y_max - y_min
+    print(f"[VALIDATION] {section_name} marker spread: {x_range}px wide x {y_range}px tall")
+
+    # Check marker symmetry (markers should form a rectangle)
+    xs_sorted = sorted(xs_centers)
+    ys_sorted = sorted(ys_centers)
     
-    print(f"\n[VALIDATION] Marker spread: {x_range}px wide x {y_range}px tall")
+    x_spread = xs_sorted[-1] - xs_sorted[0]
+    y_spread = ys_sorted[-1] - ys_sorted[0]
     
-    # The 4 corners should span a reasonable area
-    if x_range < 100 or y_range < 100:
-        print("[WARNING] Markers too close together - might not be actual corner markers")
+    if x_spread < 100 or y_spread < 100:
+        print(f"[ERROR] {section_name}: Markers too close together (x_spread={x_spread}, y_spread={y_spread})")
         if show_debug and debug_img is not None:
             cv2.rectangle(debug_img, (x_min, y_min), (x_max, y_max), (0, 0, 255), 3)
-            cv2.imshow('Corner Marker Detection - TOO SMALL', debug_img)
+            resized = fit_to_screen(debug_img, max_height=1000)
+            cv2.imshow(f'{section_name} Corner Marker Detection - INVALID SPREAD', resized)
             cv2.waitKey(0)
             cv2.destroyAllWindows()
         return None
-    
-    # Check aspect ratio of the region
-    region_aspect = x_range / y_range if y_range > 0 else 0
-    print(f"[VALIDATION] Region aspect ratio: {region_aspect:.2f}")
-    
-    print(f"\n[SUCCESS] Student ID region: ({x_min}, {y_min}) to ({x_max}, {y_max})")
-    print(f"           Size: {x_range}x{y_range} pixels")
-    
-    # Show debug visualization
+
     if show_debug and debug_img is not None:
-        # Highlight the 4 selected markers
-        for (cx, cy, area, w, h) in markers_sorted:
-            cv2.circle(debug_img, (cx, cy), 10, (255, 0, 0), -1)
+        # Draw marker centers
+        for (cx, cy, w, h, a, x, y, fr, mv) in markers_sorted:
+            cv2.circle(debug_img, (cx, cy), 8, (255, 0, 0), -1)
+            cv2.rectangle(debug_img, (x, y), (x+w, y+h), (255, 0, 0), 2)
         
-        # Draw the ID region boundary
+        # Draw region bounds
         cv2.rectangle(debug_img, (x_min, y_min), (x_max, y_max), (255, 0, 255), 3)
-        cv2.putText(debug_img, "ID REGION", (x_min, y_min - 10),
-                   cv2.FONT_HERSHEY_SIMPLEX, 3, (255, 0, 255), 2)
+        cv2.putText(debug_img, f"{section_name} ({expected_size_pt}pt ≈ {expected_px:.1f}px)",
+                    (x_min, y_min - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 255), 2)
         
-        # Resize for display if needed
-        height, width = debug_img.shape[:2]
-        max_height = 900
-        if height > max_height:
-            scale = max_height / height
-            new_width = int(width * scale)
-            new_height = int(height * scale)
-            debug_img = cv2.resize(debug_img, (new_width, new_height))
-        
-        cv2.imshow('Corner Marker Detection - SUCCESS', debug_img)
+        # Draw info text
+        info_text = f"Markers: 4 ✓ | Region: {x_range}x{y_range}px | STRICT MODE"
+        cv2.putText(debug_img, info_text, (x_min, y_max + 30),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 165, 0), 2)
+
+        resized = fit_to_screen(debug_img, max_height=1000)
+        cv2.imshow(f'{section_name} Corner Marker Detection - SUCCESS', resized)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
-    
+
+    print(f"[SUCCESS] {section_name} region: ({x_min}, {y_min}) to ({x_max}, {y_max})")
     return (x_min, y_min, x_max, y_max)
 
 
+# Backwards-compatible wrapper: original detect_corner_markers now calls expected-size detector with ID_MARKER_PT
+# Backwards-compatible wrapper: detect Student ID region using 10pt markers
+def detect_corner_markers(image, dpi=300, show_debug=True):
+    """
+    Wrapper that detects the Student ID corner markers using ID_MARKER_PT (10pt).
+    STRICT: Requires exactly 4 solid black squares with no text.
+    """
+    return detect_corner_markers_by_expected_size(image, expected_size_pt=ID_MARKER_PT, dpi=dpi,
+                                                  tolerance=MARKER_TOLERANCE, show_debug=show_debug,
+                                                  section_name="Student ID")
+
+
+# Detect KEY region using 7pt markers
+def detect_key_region(image, dpi=300, show_debug=True):
+    """
+    Detect KEY region using 7pt corner markers.
+    STRICT: Requires exactly 4 solid black squares with no text.
+    """
+    return detect_corner_markers_by_expected_size(image, expected_size_pt=KEY_MARKER_PT, dpi=dpi,
+                                                  tolerance=MARKER_TOLERANCE, show_debug=show_debug,
+                                                  section_name="KEY")
+
+# Detect Quick Answers region using 9pt markers
+def detect_qa_region(image, dpi=300, show_debug=True):
+    """
+    Detect Quick Answers region using 9pt corner markers.
+    STRICT: Requires exactly 4 solid black squares with no text.
+    """
+    return detect_corner_markers_by_expected_size(image, expected_size_pt=QA_MARKER_PT, dpi=dpi,
+                                                  tolerance=MARKER_TOLERANCE, show_debug=show_debug,
+                                                  section_name="Quick Answers")
+
+
+# -----------------------------------------------------------------------------
+# Bubble detection
+# -----------------------------------------------------------------------------
 def detect_bubbles_in_region(image, region_mask=None, show_visualization=False):
     """
-    Detect bubbles in image, optionally restricted to a region
+    Detect bubbles in image, optionally restricted to a region.
+    STRICT: Only circular bubbles, reject squares/rectangles.
     
     Args:
         image: Input image (BGR)
@@ -192,7 +355,7 @@ def detect_bubbles_in_region(image, region_mask=None, show_visualization=False):
         show_visualization: If True, display detection visualization
         
     Returns:
-        List of detected bubble groups with coordinates
+        List of detected bubble tuples: (cx, cy, radius, contour)
     """
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
@@ -203,7 +366,7 @@ def detect_bubbles_in_region(image, region_mask=None, show_visualization=False):
         thresh = cv2.bitwise_and(thresh, thresh, mask=region_mask)
     
     if show_visualization:
-        cv2.imshow('Thresholded', thresh)
+        cv2.imshow('Thresholded', fit_to_screen(thresh, max_height=1000))
         cv2.waitKey(500)
     
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -218,45 +381,51 @@ def detect_bubbles_in_region(image, region_mask=None, show_visualization=False):
                 if perimeter == 0:
                     continue
                 circularity = 4 * np.pi * (area / (perimeter * perimeter))
-                # Bubbles should be circular, unlike square corner markers
-                if 0.7 < circularity < 1.2:
-                    bubble_contours.append((int(x), int(y), int(radius), cnt))
+                
+                # STRICT: Bubbles must be circular (0.80+), reject squares/rectangles
+                # Circle: circularity ≈ 1.0
+                # Square: circularity ≈ 0.64 (REJECT)
+                # Oval: circularity ≈ 0.85-0.95
+                if circularity > 0.80:  # was 0.7 - MUCH stricter
+                    # Additional check: aspect ratio of bounding circle vs contour
+                    x_min, y_min, w, h = cv2.boundingRect(cnt)
+                    aspect_ratio = float(w) / h if h > 0 else 0
+                    
+                    # Circles should have aspect ratio ~1.0, squares are also ~1.0
+                    # But we can use the enclosing circle to filter: 
+                    # Circle fit should be tight (contour fills most of circle)
+                    circle_area = np.pi * (radius ** 2)
+                    circle_fill_ratio = area / circle_area
+                    
+                    # For a perfect circle: fill_ratio = 1.0
+                    # For a square in a circle: fill_ratio ≈ 0.637
+                    # For an oval: fill_ratio ≈ 0.8-0.95
+                    if circle_fill_ratio > 0.75:  # Reject squares (0.637), keep circles (0.95+) and ovals
+                        bubble_contours.append((int(x), int(y), int(radius), cnt))
     
     return bubble_contours
 
 
-def detect_question_bubbles(image, id_region=None, show_visualization=False):
+# -----------------------------------------------------------------------------
+# Question bubble detection (excludes ID and KEY regions)
+# -----------------------------------------------------------------------------
+def detect_question_bubbles(image, id_region=None, key_region=None, qa_region=None, show_visualization=False):
     """
-    Detect question bubbles (excluding ID region)
-    
-    Args:
-        image: Input image
-        id_region: (x_min, y_min, x_max, y_max) to exclude, or None
-        show_visualization: If True, display detection
-        
-    Returns:
-        List of detected questions with coordinates
+    Detect question bubbles (excluding ID, KEY, and Quick Answers regions)
     """
-    # Create mask for question region (everything EXCEPT ID region)
     height, width = image.shape[:2]
     region_mask = np.ones((height, width), dtype=np.uint8) * 255
     
-    if id_region is not None:
-        x_min, y_min, x_max, y_max = id_region
-        # Expand exclusion zone slightly
-        padding = 20
-        x_min = max(0, x_min - padding)
-        y_min = max(0, y_min - padding)
-        x_max = min(width, x_max + padding)
-        y_max = min(height, y_max + padding)
-        
-        # Black out ID region in mask
-        region_mask[y_min:y_max, x_min:x_max] = 0
-        print(f"[INFO] Excluding ID region from question detection: ({x_min}, {y_min}) to ({x_max}, {y_max})")
-    else:
-        print(f"[INFO] No ID region to exclude - detecting questions in entire image")
+    padding = 20
+    for region in [id_region, key_region, qa_region]:
+        if region:
+            x_min, y_min, x_max, y_max = region
+            x_min = max(0, x_min - padding)
+            y_min = max(0, y_min - padding)
+            x_max = min(width, x_max + padding)
+            y_max = min(height, y_max + padding)
+            region_mask[y_min:y_max, x_min:x_max] = 0
     
-    # Detect bubbles in question region
     bubble_contours = detect_bubbles_in_region(image, region_mask, show_visualization)
     
     print(f"Detected {len(bubble_contours)} question bubble candidates.")
@@ -338,13 +507,29 @@ def detect_question_bubbles(image, id_region=None, show_visualization=False):
         output = image.copy()
         pad = 10
         
-        # Draw excluded ID region if it exists
+        # Draw excluded ID region
         if id_region is not None:
             x_min, y_min, x_max, y_max = id_region
             cv2.rectangle(output, (x_min - padding, y_min - padding), 
                          (x_max + padding, y_max + padding), (0, 0, 255), 2)
             cv2.putText(output, "EXCLUDED (ID)", (x_min, y_min - 30),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+        
+        # Draw excluded KEY region
+        if key_region is not None:
+            kx_min, ky_min, kx_max, ky_max = key_region
+            cv2.rectangle(output, (kx_min - padding, ky_min - padding), 
+                         (kx_max + padding, ky_max + padding), (0, 255, 255), 2)
+            cv2.putText(output, "EXCLUDED (KEY)", (kx_min, ky_min - 30),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        
+        # Draw excluded Quick Answers region
+        if qa_region is not None:
+            qx_min, qy_min, qx_max, qy_max = qa_region
+            cv2.rectangle(output, (qx_min - padding, qy_min - padding), 
+                         (qx_max + padding, qy_max + padding), (255, 0, 255), 2)
+            cv2.putText(output, "EXCLUDED (QA)", (qx_min, qy_min - 30),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
         
         for i, (group, (x_min, x_max, y_min, y_max, r_avg)) in enumerate(detected_questions_sorted):
             cv2.rectangle(
@@ -357,32 +542,20 @@ def detect_question_bubbles(image, id_region=None, show_visualization=False):
                 cv2.circle(output, (x, y), r, (0, 255, 0), 2)
             print(f"Question {i+1} detected at ({x_min - r_avg - pad}, {y_min - r_avg - pad})")
         
-        height, width = output.shape[:2]
-        max_height = 900
-        if height > max_height:
-            scale = max_height / height
-            new_width = int(width * scale)
-            new_height = int(height * scale)
-            output = cv2.resize(output, (new_width, new_height))
-        
-        cv2.imshow('Detected Question Bubbles', output)
+        resized = fit_to_screen(output, max_height=1000)
+        cv2.imshow('Detected Question Bubbles', resized)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
     
     return detected_questions_sorted
 
 
+# -----------------------------------------------------------------------------
+# Student ID bubble detection (existing implementation preserved)
+# -----------------------------------------------------------------------------
 def detect_id_bubbles(image, id_region, show_visualization=False):
     """
-    Detect Student ID bubbles within the marked region (improved column detection).
-
-    Strategy:
-    - Detect contours in the ID region (reuse detect_bubbles_in_region).
-    - Filter by median radius to remove outliers.
-    - Cluster columns by looking for large gaps in sorted x-coordinates (adaptive).
-    - Accept columns that are close to 10 bubbles (allow tolerance).
-    - If needed, fall back to a simpler x-threshold grouping.
-    - When columns have >10 bubbles, pick 10 positions evenly (nearest to ideal positions).
+    Detect Student ID bubbles within the marked region (10 digits, 0-9 each).
     """
     x_min, y_min, x_max, y_max = id_region
 
@@ -409,14 +582,13 @@ def detect_id_bubbles(image, id_region, show_visualization=False):
 
     filtered = [b for b in bubble_contours if abs(b[2] - med_r) < 0.45 * med_r]
     if not filtered:
-        # if too aggressive, fall back to original list
         filtered = bubble_contours.copy()
 
     # Sort by x (primary) then y
     filtered.sort(key=lambda b: (b[0], b[1]))
     xs = np.array([b[0] for b in filtered])
 
-    # If we don't have enough points for gap analysis, fallback to threshold grouping
+    # Adaptive 1D clustering using large gaps in sorted x
     if len(xs) < 3:
         print("[INFO] Not enough bubbles for adaptive clustering, using simple grouping.")
         x_threshold = 30
@@ -433,11 +605,10 @@ def detect_id_bubbles(image, id_region, show_visualization=False):
             if not placed:
                 columns.append([b])
     else:
-        # Adaptive 1D clustering using large gaps in sorted x
         gaps = np.diff(xs)
         median_gap = np.median(gaps)
         std_gap = np.std(gaps)
-        split_thresh = max(1.8 * median_gap, median_gap + 1.5 * std_gap, 30)  # at least 30 px
+        split_thresh = max(1.8 * median_gap, median_gap + 1.5 * std_gap, 30)
         split_indices = np.where(gaps > split_thresh)[0]
 
         columns = []
@@ -453,35 +624,30 @@ def detect_id_bubbles(image, id_region, show_visualization=False):
 
     print(f"[INFO] Found {len(columns)} raw columns after clustering")
 
-    # Keep only columns that are near 10 bubbles (allow tolerance)
+    # Keep only columns that are near 10 bubbles
     valid_columns = [col for col in columns if 8 <= len(col) <= 12]
 
-    # If none found, relax criteria: pick columns closest to 10 bubbles
+    # If none found, relax criteria
     if not valid_columns:
-        # rank cols by closeness to 10
         columns_sorted = sorted(columns, key=lambda c: abs(len(c) - 10))
-        # keep up to a reasonable number (e.g., top 6)
         valid_columns = columns_sorted[:min(6, len(columns_sorted))]
         print(f"[INFO] No strict-valid columns; selected {len(valid_columns)} best candidates by count")
 
-    # For each selected column ensure exactly 10 bubbles:
+    # For each selected column ensure exactly 10 bubbles
     final_columns = []
     for col in valid_columns:
-        col = sorted(col, key=lambda b: b[1])  # top-to-bottom
+        col = sorted(col, key=lambda b: b[1])
         if len(col) == 10:
             final_columns.append(col)
             continue
         if len(col) > 10:
-            # pick 10 by matching to 10 evenly spaced targets across the column's y-range
             ys = np.array([b[1] for b in col])
             targets = np.linspace(ys.min(), ys.max(), 10)
             chosen = []
             used = set()
             for t in targets:
                 idx = int(np.argmin(np.abs(ys - t)))
-                # avoid picking same bubble twice
                 if idx in used:
-                    # choose nearest unused neighbor
                     offsets = np.arange(len(ys))
                     best = None
                     best_dist = 1e9
@@ -495,7 +661,6 @@ def detect_id_bubbles(image, id_region, show_visualization=False):
                     idx = best if best is not None else idx
                 used.add(idx)
                 chosen.append(col[idx])
-            # de-duplicate and keep order top-to-bottom
             chosen_unique = []
             seen = set()
             for b in chosen:
@@ -503,15 +668,12 @@ def detect_id_bubbles(image, id_region, show_visualization=False):
                 if key not in seen:
                     seen.add(key)
                     chosen_unique.append(b)
-            # If still not 10 due to duplicates, take first 10
             chosen_unique = sorted(chosen_unique, key=lambda b: b[1])[:10]
             if len(chosen_unique) == 10:
                 final_columns.append(chosen_unique)
             else:
-                # fallback: take 10 largest by y spacing
                 final_columns.append(sorted(col, key=lambda b: b[1])[:10])
         else:
-            # len < 10: skip if too few, otherwise keep as-is (best effort)
             if len(col) >= 7:
                 final_columns.append(col)
             else:
@@ -528,7 +690,6 @@ def detect_id_bubbles(image, id_region, show_visualization=False):
     }
 
     for col_idx, col in enumerate(final_columns):
-        # sort top-to-bottom
         col = sorted(col, key=lambda b: b[1])
         digit_data = {
             'digit_position': col_idx + 1,
@@ -536,7 +697,7 @@ def detect_id_bubbles(image, id_region, show_visualization=False):
         }
         for row_idx, (x, y, r, cnt) in enumerate(col):
             digit_data['bubbles'].append({
-                'digit': row_idx,  # 0-9 (order by position)
+                'digit': row_idx,
                 'x': int(x),
                 'y': int(y),
                 'radius': int(r)
@@ -545,7 +706,7 @@ def detect_id_bubbles(image, id_region, show_visualization=False):
 
     print(f"[SUCCESS] {len(final_columns)} valid digit columns after clustering/refinement")
 
-    # Visualization (only valid bubbles)
+    # Visualization
     if show_visualization:
         output = image.copy()
         cv2.rectangle(output, (x_min, y_min), (x_max, y_max), (0, 255, 255), 3)
@@ -558,86 +719,139 @@ def detect_id_bubbles(image, id_region, show_visualization=False):
                 cv2.putText(output, str(row_idx), (x - 5, y + 5),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 255), 1)
 
-        height, width = output.shape[:2]
-        max_height = 900
-        if height > max_height:
-            scale = max_height / height
-            new_width = int(width * scale)
-            new_height = int(height * scale)
-            output = cv2.resize(output, (new_width, new_height))
-
-        cv2.imshow('Detected ID Bubbles (refined)', output)
+        resized = fit_to_screen(output, max_height=1000)
+        cv2.imshow('Detected ID Bubbles (refined)', resized)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
 
     return id_data
 
 
-def detect_bubbles_in_image(image_path, show_visualization=False):
+# -----------------------------------------------------------------------------
+# KEY bubble detection (new)
+# -----------------------------------------------------------------------------
+def detect_key_bubbles(image, key_region, show_visualization=False):
     """
-    Main detection function: detects both questions and student ID
-    
-    Args:
-        image_path: Path to image file
-        show_visualization: If True, display detection visualization
+    Detect the 5 KEY bubbles (A, B, C, D, E) in the key region
+    """
+    x_min, y_min, x_max, y_max = key_region
+    height, width = image.shape[:2]
+    region_mask = np.zeros((height, width), dtype=np.uint8)
+    region_mask[y_min:y_max, x_min:x_max] = 255
+
+    bubble_contours = detect_bubbles_in_region(image, region_mask, show_visualization)
+    if not bubble_contours:
+        print("[WARNING] No key bubbles detected!")
+        return []
+
+    # Sort left-to-right
+    bubble_contours.sort(key=lambda b: b[0])
+    # Keep up to 5 left-most bubbles
+    key_bubbles = bubble_contours[:5]
+
+    key_data = []
+    for idx, (cx, cy, r, cnt) in enumerate(key_bubbles):
+        key_data.append({'position': idx+1, 'x': int(cx), 'y': int(cy), 'radius': int(r)})
+
+    if show_visualization:
+        output = image.copy()
+        cv2.rectangle(output, (x_min, y_min), (x_max, y_max), (0, 255, 255), 2)
+        cv2.putText(output, "KEY REGION", (x_min, y_min - 10),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
         
-    Returns:
-        Tuple of (questions, id_data)
+        for b in key_data:
+            cv2.circle(output, (b['x'], b['y']), b['radius'], (0, 0, 255), 2)
+        
+        resized = fit_to_screen(output, max_height=1000)
+        cv2.imshow("Detected KEY Bubbles", resized)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+
+    return key_data
+
+
+# -----------------------------------------------------------------------------
+# Main detection pipeline (now accepts dpi to convert pt->px)
+# -----------------------------------------------------------------------------
+def detect_bubbles_in_image(image_path, show_visualization=False, dpi=300):
+    """
+    Main detection function: detects ID region, KEY region, Quick Answers region, 
+    question bubbles, ID bubbles, and KEY bubbles.
+    
+    Student ID: 10pt corner markers (4 squares)
+    KEY: 7pt corner markers (4 squares)
+    Quick Answers: 9pt corner markers (4 squares)
+    
+    Returns (questions, id_data, key_data, qa_data)
     """
     image = cv2.imread(image_path)
     if image is None:
         print(f"Error: Image not found at {image_path}")
-        return [], None
-    
+        return [], None, None, None
+
     print("\n" + "="*60)
-    print("STEP 1: Detecting Student ID Region (Corner Markers)")
+    print("STEP 1: Detecting Student ID Region (10pt markers)")
     print("="*60)
-    
-    # Detect corner markers to find ID region
-    id_region = detect_corner_markers(image, show_debug=show_visualization)
-    
+
+    id_region = detect_corner_markers(image, dpi=dpi, show_debug=show_visualization)
+
     if id_region is None:
         print("\n[WARNING] Could not detect ID region!")
-        print("Possible issues:")
-        print("  - Corner markers not visible or too small/large")
-        print("  - Markers not dark enough")
-        print("  - Markers not square-shaped enough")
-        print("\nTip: Adjust area threshold (200-2000) and darkness threshold (<60)")
-        print("     in detect_corner_markers() function")
-    
+
     print("\n" + "="*60)
-    print("STEP 2: Detecting Question Bubbles")
+    print("STEP 2: Detecting KEY Region (7pt markers)")
     print("="*60)
-    
-    # Detect question bubbles (excluding ID region)
-    questions = detect_question_bubbles(image, id_region, show_visualization)
-    
+
+    key_region = detect_key_region(image, dpi=dpi, show_debug=show_visualization)
+
+    if key_region is None:
+        print("[INFO] KEY region not detected (may be expected if sheet has no KEY).")
+
+    print("\n" + "="*60)
+    print("STEP 3: Detecting Quick Answers Region (9pt markers)")
+    print("="*60)
+
+    qa_region = detect_qa_region(image, dpi=dpi, show_debug=show_visualization)
+
+    if qa_region is None:
+        print("[INFO] Quick Answers region not detected (may be expected if sheet has no QA).")
+
+    print("\n" + "="*60)
+    print("STEP 4: Detecting Question Bubbles")
+    print("="*60)
+
+    questions = detect_question_bubbles(image, id_region=id_region, key_region=key_region, 
+                                       qa_region=qa_region, show_visualization=show_visualization)
+
     # Detect ID bubbles if region was found
     id_data = None
     if id_region is not None:
         print("\n" + "="*60)
-        print("STEP 3: Detecting Student ID Bubbles")
+        print("STEP 5: Detecting Student ID Bubbles")
         print("="*60)
         id_data = detect_id_bubbles(image, id_region, show_visualization)
     else:
+        print("\n[INFO] Skipping ID bubble detection (no ID region found)")
+
+    # Detect KEY bubbles if region was found
+    key_data = None
+    if key_region is not None:
         print("\n" + "="*60)
-        print("STEP 3: Skipping ID Bubble Detection (no region found)")
+        print("STEP 6: Detecting KEY Bubbles")
         print("="*60)
-    
-    return questions, id_data
+        key_data = detect_key_bubbles(image, key_region, show_visualization)
+    else:
+        print("\n[INFO] Skipping KEY bubble detection (no KEY region found)")
+
+    return questions, id_data, key_data, qa_region
 
 
+# -----------------------------------------------------------------------------
+# Save / load template helpers
+# -----------------------------------------------------------------------------
 def save_template_to_json(template_data, source_file, output_dir='template'):
     """
     Save template data to JSON file in template directory
-    
-    Args:
-        template_data: Dictionary containing template information
-        source_file: Original source file path (PDF or image)
-        output_dir: Directory to save JSON template
-        
-    Returns:
-        Path to saved JSON file
     """
     os.makedirs(output_dir, exist_ok=True)
     
@@ -667,12 +881,6 @@ def save_template_to_json(template_data, source_file, output_dir='template'):
 def convert_question_data_to_json_serializable(questions):
     """
     Convert question detection data to JSON-serializable format
-    
-    Args:
-        questions: List of detected questions with contours
-        
-    Returns:
-        List of question dictionaries with serializable data
     """
     json_questions = []
     
@@ -709,16 +917,10 @@ def process_pdf_answer_sheet(pdf_path, dpi=300, keep_png=False, show_visualizati
     """
     Complete workflow: Convert PDF to PNG, detect bubbles, save to JSON
     
-    Args:
-        pdf_path: Path to PDF file
-        dpi: Resolution for PDF conversion
-        keep_png: If True, keep converted PNG files
-        show_visualization: If True, show detection visualization
-        
-    Returns:
-        Path to saved JSON template file
+    Student ID markers: 10pt (4 squares)
+    KEY markers: 7pt (4 squares)
+    Quick Answers markers: 9pt (4 squares)
     """
-    
     try:
         png_paths = convert_pdf_to_png(pdf_path, dpi=dpi)
     except Exception as e:
@@ -733,8 +935,8 @@ def process_pdf_answer_sheet(pdf_path, dpi=300, keep_png=False, show_visualizati
         print(f"{'='*60}")
         print(f"File: {png_path}")
         
-        # Detect both questions and ID
-        questions, id_data = detect_bubbles_in_image(png_path, show_visualization=show_visualization)
+        # Detect questions, ID, KEY, and QA (pass dpi for marker conversion)
+        questions, id_data, key_data, qa_region = detect_bubbles_in_image(png_path, show_visualization=show_visualization, dpi=dpi)
         
         # Get image dimensions
         img = cv2.imread(png_path)
@@ -749,7 +951,9 @@ def process_pdf_answer_sheet(pdf_path, dpi=300, keep_png=False, show_visualizati
             },
             'questions_detected': len(questions),
             'questions': convert_question_data_to_json_serializable(questions),
-            'student_id': id_data
+            'student_id': id_data,
+            'key_bubbles': key_data,
+            'quick_answers_region': qa_region
         }
         
         print(f"\nPage {i} Summary:")
@@ -758,6 +962,14 @@ def process_pdf_answer_sheet(pdf_path, dpi=300, keep_png=False, show_visualizati
             print(f"  Student ID: Detected ({id_data['total_digits']} digits)")
         else:
             print(f"  Student ID: Not found")
+        if key_data:
+            print(f"  Key bubbles: Detected ({len(key_data)} bubbles)")
+        else:
+            print(f"  Key bubbles: Not found")
+        if qa_region:
+            print(f"  Quick Answers: Detected")
+        else:
+            print(f"  Quick Answers: Not found")
     
     # Save to JSON
     json_path = save_template_to_json(template_data, pdf_path)
@@ -789,12 +1001,6 @@ def process_pdf_answer_sheet(pdf_path, dpi=300, keep_png=False, show_visualizati
 def load_template_from_json(json_path):
     """
     Load a saved template from JSON file
-    
-    Args:
-        json_path: Path to JSON template file
-        
-    Returns:
-        Dictionary containing template data
     """
     with open(json_path, 'r', encoding='utf-8') as f:
         template_data = json.load(f)
@@ -806,14 +1012,22 @@ def load_template_from_json(json_path):
     
     return template_data
 
+def points_to_pixels(points, dpi):
+    """
+    Convert PDF points (pt) to pixels using DPI.
+    1 pt = 1/72 inch, so pixels = points * dpi / 72
+    """
+    return (points * dpi) / 72.0
 
-# Example usage
+
+# -----------------------------------------------------------------------------
+# CLI / main
+# -----------------------------------------------------------------------------
 if __name__ == "__main__":
-    
-    # Process a PDF
-    print("Processing PDF with Student ID detection")
+    # Process a PDF (default DPI = 300)
+    print("Processing PDF with Student ID and KEY detection (DPI=300)")
     json_path = process_pdf_answer_sheet(
-        pdf_path='answer_sheet_10q.pdf',
+        pdf_path='test_sheet_with_key.pdf',
         dpi=300,
         keep_png=False,
         show_visualization=True
@@ -830,6 +1044,6 @@ if __name__ == "__main__":
                 print(f"\n{page_key}:")
                 print(f"  Questions: {page_data['questions_detected']}")
                 print(f"  Student ID: {page_data['student_id'] is not None}")
-                
                 if page_data['student_id']:
                     print(f"  ID Digits: {page_data['student_id']['total_digits']}")
+                print(f"  Key Bubbles: {page_data['key_bubbles'] is not None}")

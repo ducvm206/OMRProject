@@ -2,8 +2,7 @@
 query_db.py - Database query and inspection tool (Updated for new schema)
 
 This script provides utilities to view and query the grading system database.
-Updated to reflect that MCQ/written question counts are determined during
-answer key creation based on max total points for each part.
+Updated for the new schema with exams table and unified key_info.
 
 Usage:
     python database/query_db.py [command]
@@ -13,6 +12,7 @@ Commands:
     tables    - List all tables with row counts
     views     - List all views
     students  - Show all students
+    exams     - Show all exams with answer keys
     keys      - Show answer keys with question type breakdown
     recent    - Show recent grades
     schema    - Show table schemas
@@ -65,6 +65,7 @@ def show_stats():
     tables = [
         ('sheets', 'Sheets'),
         ('templates', 'Templates'),
+        ('exams', 'Exams'),
         ('answer_keys', 'Answer Keys'),
         ('students', 'Students'),
         ('graded_sheets', 'Graded Sheets'),
@@ -80,19 +81,6 @@ def show_stats():
         except:
             print(f"  {disp:.<40} (missing)")
 
-    # ---- Question Type Breakdown ----
-    cursor.execute("""
-        SELECT 
-            SUM(total_mcq_questions) as total_mcq,
-            SUM(total_written_questions) as total_written
-        FROM graded_sheets
-    """)
-    result = cursor.fetchone()
-    if result and (result['total_mcq'] or result['total_written']):
-        print("\nQuestion Type Distribution:")
-        print(f"  Total MCQ questions graded........ {result['total_mcq'] or 0}")
-        print(f"  Total Written questions graded.... {result['total_written'] or 0}")
-
     # ---- Score summary ----
     cursor.execute("SELECT COUNT(*) FROM graded_sheets")
     total = cursor.fetchone()[0]
@@ -100,43 +88,24 @@ def show_stats():
     if total > 0:
         cursor.execute("""
             SELECT
-                AVG(CASE
-                        WHEN total_mcq_questions + total_written_questions > 0
-                        THEN (mcq_correct_count + written_correct_count) * 100.0
-                             / (total_mcq_questions + total_written_questions)
-                END) as avg_score,
-                MIN(CASE
-                        WHEN total_mcq_questions + total_written_questions > 0
-                        THEN (mcq_correct_count + written_correct_count) * 100.0
-                             / (total_mcq_questions + total_written_questions)
-                END) as min_score,
-                MAX(CASE
-                        WHEN total_mcq_questions + total_written_questions > 0
-                        THEN (mcq_correct_count + written_correct_count) * 100.0
-                             / (total_mcq_questions + total_written_questions)
-                END) as max_score,
-                AVG(CASE
-                        WHEN total_mcq_questions > 0
-                        THEN mcq_correct_count * 100.0 / total_mcq_questions
-                END) as avg_mcq_score,
-                AVG(CASE
-                        WHEN total_written_questions > 0
-                        THEN written_correct_count * 100.0 / total_written_questions
-                END) as avg_written_score
+                AVG(percentage) as avg_percentage,
+                MIN(percentage) as min_percentage,
+                MAX(percentage) as max_percentage,
+                AVG(score) as avg_score,
+                SUM(score) as total_score,
+                SUM(max_score) as total_max_score
             FROM graded_sheets
         """)
         row = cursor.fetchone()
         
         print("\nGrading Stats:")
         print(f"  Total graded sheets:.............. {total}")
-        print(f"  Average overall score:............ {row['avg_score']:.2f}%")
-        print(f"  Lowest score:..................... {row['min_score']:.2f}%")
-        print(f"  Highest score:.................... {row['max_score']:.2f}%")
-        
-        if row['avg_mcq_score'] is not None:
-            print(f"  Average MCQ score:................ {row['avg_mcq_score']:.2f}%")
-        if row['avg_written_score'] is not None:
-            print(f"  Average Written score:............ {row['avg_written_score']:.2f}%")
+        print(f"  Average percentage:............... {row['avg_percentage']:.2f}%")
+        print(f"  Lowest percentage:................ {row['min_percentage']:.2f}%")
+        print(f"  Highest percentage:............... {row['max_percentage']:.2f}%")
+        print(f"  Total score (points):............. {row['total_score']:.2f}")
+        print(f"  Total possible points:............ {row['total_max_score']:.2f}")
+        print(f"  Overall percentage:............... {(row['total_score']/row['total_max_score']*100 if row['total_max_score'] > 0 else 0):.2f}%")
 
     conn.close()
 
@@ -218,15 +187,14 @@ def show_students():
 
     cursor.execute("""
         SELECT 
-            s.student_id,
-            s.name,
-            s.class,
-            s.total_exams,
-            s.total_score,
-            s.total_questions,
-            s.avg_percentage
-        FROM students s
-        ORDER BY s.created_at DESC
+            student_id,
+            total_exams,
+            total_score,
+            total_possible_points,
+            avg_percentage,
+            updated_at
+        FROM students
+        ORDER BY updated_at DESC
     """)
 
     rows = cursor.fetchall()
@@ -234,21 +202,80 @@ def show_students():
         print("\nNo students found.\n")
         return
 
-    print(f"\n{'ID':<12} {'Name':<20} {'Class':<10} {'Exams':<8} "
-          f"{'Correct/Total':<15} {'Avg %':<8}")
-    print("-"*75)
+    print(f"\n{'Student ID':<12} {'Exams':<8} {'Score':<12} {'Avg %':<10} {'Last Updated'}")
+    print("-"*60)
 
     for s in rows:
-        correct = s["total_score"]
-        total = s["total_questions"]
-        avg_pct = s["avg_percentage"] or 0
-
         print(f"{s['student_id']:<12} "
-              f"{(s['name'] or 'Unknown'):<20} "
-              f"{(s['class'] or '-'):<10} "
               f"{s['total_exams']:<8} "
-              f"{correct}/{total:<14} "
-              f"{avg_pct:>6.2f}%")
+              f"{s['total_score']:.2f}/{s['total_possible_points']:.2f}  "
+              f"{s['avg_percentage']:>7.2f}%  "
+              f"{s['updated_at'][:19]}")
+
+    conn.close()
+
+
+# ------------------------------------------------------------
+# EXAMS
+# ------------------------------------------------------------
+def show_exams():
+    """Show all exams with their answer keys"""
+    conn = connect_db()
+    cursor = conn.cursor()
+
+    print("\n" + "="*70)
+    print("EXAMS AND ANSWER KEYS")
+    print("="*70)
+
+    cursor.execute("""
+        SELECT 
+            e.id,
+            e.name,
+            e.description,
+            e.max_score as exam_max_score,
+            e.created_at,
+            COUNT(DISTINCT ak.id) as key_count,
+            GROUP_CONCAT(DISTINCT ak.label) as key_labels
+        FROM exams e
+        LEFT JOIN answer_keys ak ON e.id = ak.exam_id
+        GROUP BY e.id
+        ORDER BY e.created_at DESC
+    """)
+
+    exams = cursor.fetchall()
+
+    if not exams:
+        print("\nNo exams found.\n")
+        return
+
+    for exam in exams:
+        print(f"\nExam ID: {exam['id']}")
+        print(f"Name: {exam['name']}")
+        if exam['description']:
+            print(f"Description: {exam['description']}")
+        print(f"Max Score: {exam['exam_max_score']:.2f}")
+        print(f"Keys: {exam['key_labels'] or 'No keys'}")
+        print(f"Created: {exam['created_at'][:19]}")
+        
+        # Show detailed key information
+        cursor.execute("""
+            SELECT 
+                ak.id,
+                ak.label,
+                ak.name,
+                t.name as template_name,
+                json_extract(ak.key_info, '$.metadata.total_max_points') as total_points
+            FROM answer_keys ak
+            JOIN templates t ON ak.template_id = t.id
+            WHERE ak.exam_id = ?
+            ORDER BY ak.label
+        """, (exam['id'],))
+        
+        keys = cursor.fetchall()
+        for key in keys:
+            print(f"  Key {key['label']}: {key['name']} (Template: {key['template_name']}, Points: {key['total_points']})")
+        
+        print("-" * 70)
 
     conn.close()
 
@@ -262,21 +289,24 @@ def show_answer_keys():
     cursor = conn.cursor()
 
     print("\n" + "="*70)
-    print("ANSWER KEYS - QUESTION TYPE BREAKDOWN")
+    print("ANSWER KEYS - DETAILED VIEW")
     print("="*70)
-    print("\n[NOTE] MCQ and written question counts are determined from")
-    print("       max total points entered during answer key creation\n")
 
     cursor.execute("""
         SELECT 
             ak.id,
+            ak.label,
             ak.name,
-            ak.created_at,
+            e.name as exam_name,
             t.name as template_name,
             ak.key_info,
-            ak.written_key_info
+            ak.created_at,
+            COUNT(gs.id) as usage_count
         FROM answer_keys ak
+        JOIN exams e ON ak.exam_id = e.id
         JOIN templates t ON ak.template_id = t.id
+        LEFT JOIN graded_sheets gs ON ak.id = gs.key_id
+        GROUP BY ak.id
         ORDER BY ak.created_at DESC
     """)
 
@@ -288,47 +318,35 @@ def show_answer_keys():
 
     for key in keys:
         print(f"\nKey ID: {key['id']}")
+        print(f"Exam: {key['exam_name']}")
+        print(f"Label: {key['label']}")
         print(f"Name: {key['name']}")
         print(f"Template: {key['template_name']}")
         print(f"Created: {key['created_at'][:19]}")
+        print(f"Times Used: {key['usage_count']}")
         
-        # Parse MCQ info
-        mcq_count = 0
-        mcq_points = 0
+        # Parse key_info
         try:
-            mcq_info = json.loads(key['key_info'])
-            metadata = mcq_info.get('metadata', {})
-            mcq_count = metadata.get('total_mcq_questions', 0)
-            mcq_points = metadata.get('mcq_max_points', mcq_count)
-        except:
-            pass
-        
-        # Parse written info
-        written_count = 0
-        written_points = 0
-        if key['written_key_info']:
-            try:
-                written_info = json.loads(key['written_key_info'])
-                metadata = written_info.get('metadata', {})
-                written_count = metadata.get('total_written_questions', 0)
-                written_points = metadata.get('written_max_points', written_count)
-            except:
-                pass
-        
-        print(f"\nQuestion Breakdown:")
-        print(f"  MCQ Questions:......... {mcq_count:>3} (max {mcq_points} points)")
-        print(f"  Written Questions:..... {written_count:>3} (max {written_points} points)")
-        print(f"  Total Questions:....... {mcq_count + written_count:>3}")
-        print(f"  Total Max Points:...... {mcq_points + written_points:>3}")
-        
-        # Show usage stats
-        cursor.execute("""
-            SELECT COUNT(*) as usage_count
-            FROM graded_sheets
-            WHERE key_id = ?
-        """, (key['id'],))
-        usage = cursor.fetchone()['usage_count']
-        print(f"  Times Used:............ {usage:>3}")
+            key_info = json.loads(key['key_info'])
+            metadata = key_info.get('metadata', {})
+            
+            mcq_points = metadata.get('mcq_max_points', 0)
+            written_points = metadata.get('written_max_points', 0)
+            total_points = metadata.get('total_max_points', 0)
+            
+            # Extract counts from the answer keys
+            mcq_questions = len(key_info.get('mcq', {}).get('answer_key', {}))
+            written_questions = len(key_info.get('written', {}).get('answer_key', {}))
+            
+            print(f"\nQuestion Breakdown:")
+            print(f"  MCQ Questions:......... {mcq_questions:>3} (max {mcq_points} points)")
+            print(f"  Written Questions:..... {written_questions:>3} (max {written_points} points)")
+            print(f"  Total Questions:....... {mcq_questions + written_questions:>3}")
+            print(f"  Total Max Points:...... {total_points:>3}")
+            
+        except Exception as e:
+            print(f"\nError parsing key_info: {e}")
+            print(f"Raw key_info (first 500 chars): {key['key_info'][:500]}...")
         
         print("-" * 70)
 
@@ -343,20 +361,26 @@ def show_recent_grades():
     cursor = conn.cursor()
 
     print("\n" + "="*70)
-    print("RECENT GRADES (with MCQ/Written breakdown)")
+    print("RECENT GRADES")
     print("="*70)
 
     cursor.execute("""
         SELECT 
             gs.id,
             gs.student_id,
-            gs.exam_name,
+            e.name as exam_name,
+            ak.label as key_label,
+            gs.score,
+            gs.max_score,
+            gs.percentage,
             gs.total_mcq_questions,
             gs.total_written_questions,
             gs.mcq_correct_count,
             gs.written_correct_count,
             gs.graded_at
         FROM graded_sheets gs
+        JOIN answer_keys ak ON gs.key_id = ak.id
+        JOIN exams e ON ak.exam_id = e.id
         ORDER BY gs.graded_at DESC
         LIMIT 20
     """)
@@ -367,23 +391,26 @@ def show_recent_grades():
         print("\nNo grades found.")
         return
 
-    print(f"\n{'ID':<5} {'Student':<12} {'MCQ':<12} {'Written':<12} {'Total %':<8} {'Date':<20}")
-    print("-"*80)
+    print(f"\n{'ID':<5} {'Student':<12} {'Exam':<25} {'Key':<4} {'Score':<12} {'%':<8} {'Date':<20}")
+    print("-"*90)
 
     for g in rows:
-        total_q = g["total_mcq_questions"] + g["total_written_questions"]
-        total_correct = g["mcq_correct_count"] + g["written_correct_count"]
-        pct = (total_correct / total_q * 100) if total_q else 0
+        score_str = f"{g['score']:.2f}/{g['max_score']:.2f}"
         
-        mcq_str = f"{g['mcq_correct_count']}/{g['total_mcq_questions']}" if g['total_mcq_questions'] else "-"
-        written_str = f"{g['written_correct_count']}/{g['total_written_questions']}" if g['total_written_questions'] else "-"
-
         print(f"{g['id']:<5} "
               f"{g['student_id']:<12} "
-              f"{mcq_str:<12} "
-              f"{written_str:<12} "
-              f"{pct:>6.2f}% "
+              f"{g['exam_name'][:24]:<25} "
+              f"{g['key_label']:<4} "
+              f"{score_str:<12} "
+              f"{g['percentage']:>6.2f}% "
               f"{g['graded_at'][:19]}")
+
+    # Show MCQ/Written breakdown for the first result
+    if rows:
+        g = rows[0]
+        print(f"\nMost recent grade breakdown:")
+        print(f"  MCQ: {g['mcq_correct_count']}/{g['total_mcq_questions']} correct")
+        print(f"  Written: {g['written_correct_count']}/{g['total_written_questions']} correct")
 
     conn.close()
 
@@ -400,50 +427,76 @@ def show_question_difficulty():
     print("QUESTION DIFFICULTY ANALYSIS")
     print("="*70)
 
-    # MCQ difficulty
-    cursor.execute("""
-        SELECT * FROM mcq_difficulty
-        ORDER BY success_rate ASC
-        LIMIT 10
-    """)
+    # Check if we have any question results
+    cursor.execute("SELECT COUNT(*) FROM question_results")
+    total_questions = cursor.fetchone()[0]
     
-    mcq_results = cursor.fetchall()
-    
-    if mcq_results:
-        print("\nMOST DIFFICULT MCQ QUESTIONS:")
-        print(f"{'Key ID':<10} {'Question':<10} {'Attempts':<10} {'Correct':<10} {'Success %':<10}")
-        print("-"*50)
-        
-        for row in mcq_results:
-            print(f"{row['key_id']:<10} "
-                  f"Q{row['question_number']:<9} "
-                  f"{row['attempts']:<10} "
-                  f"{row['correct']:<10} "
-                  f"{row['success_rate']:>8.1f}%")
-    
-    # Written difficulty
-    cursor.execute("""
-        SELECT * FROM written_difficulty
-        ORDER BY success_rate ASC
-        LIMIT 10
-    """)
-    
-    written_results = cursor.fetchall()
-    
-    if written_results:
-        print("\nMOST DIFFICULT WRITTEN QUESTIONS:")
-        print(f"{'Key ID':<10} {'Question':<10} {'Attempts':<10} {'Correct':<10} {'Success %':<10}")
-        print("-"*50)
-        
-        for row in written_results:
-            print(f"{row['key_id']:<10} "
-                  f"Q{row['question_number']:<9} "
-                  f"{row['attempts']:<10} "
-                  f"{row['correct']:<10} "
-                  f"{row['success_rate']:>8.1f}%")
-    
-    if not mcq_results and not written_results:
+    if total_questions == 0:
         print("\nNo question results found yet.")
+        return
+
+    # Overall question difficulty
+    cursor.execute("""
+        SELECT * FROM overall_question_difficulty
+        WHERE success_rate IS NOT NULL
+        ORDER BY success_rate ASC
+        LIMIT 15
+    """)
+    
+    results = cursor.fetchall()
+    
+    if results:
+        print("\nMOST DIFFICULT QUESTIONS:")
+        print(f"{'Key':<6} {'Q#':<6} {'Type':<10} {'Attempts':<10} {'Correct':<10} {'Success %':<10}")
+        print("-"*60)
+        
+        for row in results:
+            print(f"{row['key_label']:<6} "
+                  f"Q{row['question_number']:<5} "
+                  f"{row['question_type']:<10} "
+                  f"{row['attempts']:<10} "
+                  f"{row['correct']:<10} "
+                  f"{row['success_rate']:>8.1f}%")
+    
+    # Show easiest questions too
+    cursor.execute("""
+        SELECT * FROM overall_question_difficulty
+        WHERE success_rate IS NOT NULL AND attempts >= 3
+        ORDER BY success_rate DESC
+        LIMIT 10
+    """)
+    
+    easy_results = cursor.fetchall()
+    
+    if easy_results:
+        print(f"\nEASIEST QUESTIONS (min 3 attempts):")
+        print(f"{'Key':<6} {'Q#':<6} {'Type':<10} {'Attempts':<10} {'Success %':<10}")
+        print("-"*60)
+        
+        for row in easy_results:
+            print(f"{row['key_label']:<6} "
+                  f"Q{row['question_number']:<5} "
+                  f"{row['question_type']:<10} "
+                  f"{row['attempts']:<10} "
+                  f"{row['success_rate']:>8.1f}%")
+    
+    # Type breakdown
+    cursor.execute("""
+        SELECT 
+            question_type,
+            COUNT(*) as total_questions,
+            AVG(CASE WHEN is_correct = 1 THEN 100.0 ELSE 0 END) as avg_success_rate
+        FROM question_results
+        GROUP BY question_type
+    """)
+    
+    type_results = cursor.fetchall()
+    
+    if type_results:
+        print(f"\nQUESTION TYPE SUMMARY:")
+        for row in type_results:
+            print(f"  {row['question_type'].title()}: {row['total_questions']} questions, "
+                  f"{row['avg_success_rate']:.1f}% average success rate")
 
     conn.close()
 
@@ -531,7 +584,7 @@ def main():
         default="stats",
         choices=[
             "stats", "tables", "views",
-            "students", "keys", "recent",
+            "students", "exams", "keys", "recent",
             "schema", "export", "questions"
         ]
     )
@@ -548,6 +601,8 @@ def main():
         list_views()
     elif args.command == "students":
         show_students()
+    elif args.command == "exams":
+        show_exams()
     elif args.command == "keys":
         show_answer_keys()
     elif args.command == "recent":

@@ -234,3 +234,29 @@ def get_file_modified_time(filepath):
         return datetime.datetime.fromtimestamp(timestamp)
     except:
         return None
+
+
+def validate_file_exists(file_path):
+    """
+    Validate that file exists (handle both absolute and relative paths)
+
+    Args:
+        file_path: Path to file (absolute or relative)
+
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    if not file_path:
+        return False, "File path cannot be empty"
+
+    # Convert to absolute path if needed
+    if not os.path.isabs(file_path):
+        file_path = os.path.abspath(file_path)
+
+    if not os.path.exists(file_path):
+        return False, f"File not found: {file_path}"
+
+    if not os.path.isfile(file_path):
+        return False, f"Path is not a file: {file_path}"
+
+    return True, None

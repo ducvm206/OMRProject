@@ -1,18 +1,21 @@
 """
-Answer Key Creation Flow
-Business logic for creating answer keys with MCQ and written answer support
+Answer Key Creation Flow - Multiple Keys Support
+Business logic for creating answer keys with support for multiple keys (A-E)
+Each exam can have up to 5 different answer keys
 """
 import os
 import sys
 import json
 import datetime
 import re
+import random  # Added for random answer generation
 
 # Add project root to path
 PROJECT_BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_BASE not in sys.path:
+    sys.path.insert(0, PROJECT_BASE)
 FILES_ROOT = os.path.join(PROJECT_BASE, "files")
 
-BLANK_SHEETS_DIR = os.path.join(FILES_ROOT, "blank_sheets")
 TEMPLATES_DIR = os.path.join(FILES_ROOT, "template")
 ANSWER_KEYS_DIR = os.path.join(FILES_ROOT, "answer_keys")
 
@@ -29,142 +32,30 @@ from utils.validation import (
 )
 
 
-class AnswerKeyFlow:
-    """Handles answer key creation workflow with MCQ and written answer support"""
+class AnswerKey:
+    """Represents a single answer key (A, B, C, D, or E)"""
     
-    def __init__(self):
-        """Initialize the flow"""
-        self.db_ops = get_db_operations()
-        self.current_template = None
-        self.template_data = None
-        
-        # MCQ section
-        self.mcq_answers = {}  # {question_num: [answers]}
-        self.mcq_count = 0
-        self.mcq_max_points = 0
-        
-        # Written answer section
-        self.written_answers = {}  # {question_num: numeric_answer}
-        self.written_count = 0
-        self.written_max_points = 0
-        
-        self.total_questions = 0
-    
-    def load_template(self, template_path):
+    def __init__(self, key_letter, mcq_count, written_count):
         """
-        Load a template JSON file
+        Initialize answer key
         
         Args:
-            template_path: Path to template JSON file
-            
-        Returns:
-            Tuple of (success, error_message, template_info)
+            key_letter: 'A', 'B', 'C', 'D', or 'E'
+            mcq_count: Number of MCQ questions
+            written_count: Number of written questions
         """
-        # Validate template
-        abs_path = to_absolute_path(template_path)
-        valid, error, data = validate_template_json(abs_path)
-        if not valid:
-            return False, error, None
+        self.key_letter = key_letter.upper()
+        self.mcq_count = mcq_count
+        self.written_count = written_count
         
-        # Extract template information
-        page_data = data.get('page_1', {})
-        
-        # Count MCQ bubble questions
-        bubble_answers = page_data.get('bubble_answers', {})
-        mcq_questions_available = bubble_answers.get('questions_detected', 0)
-        if not mcq_questions_available:
-            mcq_questions_available = len(bubble_answers.get('questions', []))
-        
-        # Count written answer boxes
-        quick_answers = page_data.get('quick_answers', {})
-        written_questions_available = quick_answers.get('total_questions', 0)
-        if not written_questions_available:
-            written_questions_available = len(quick_answers.get('answer_boxes', []))
-        
-        # Total questions is sum of both types
-        self.total_questions = mcq_questions_available + written_questions_available
-        
-        if self.total_questions == 0:
-            return False, "Template has no questions (no bubble_answers or quick_answers found)", None
-        
-        # Get relative path from project root/files and ensure forward slashes
-        rel_path = os.path.relpath(abs_path, FILES_ROOT).replace("\\", "/")
-        self.current_template = rel_path
-        self.template_data = data
+        # MCQ section: {question_num: [answers]}
         self.mcq_answers = {}
+        
+        # Written section: {question_num: numeric_answer}
         self.written_answers = {}
-        
-        # Check for student ID section
-        has_student_id = bool(bubble_answers.get('student_id', {}).get('digit_columns'))
-        
-        template_info = {
-            'path': self.current_template,
-            'total_questions': self.total_questions,
-            'mcq_questions_available': mcq_questions_available,
-            'written_questions_available': written_questions_available,
-            'has_student_id': has_student_id,
-            'name': os.path.basename(self.current_template)
-        }
-        
-        return True, None, template_info
-    
-    def set_question_counts(self, mcq_max_points, written_max_points):
-        """
-        Set the maximum points for MCQ and written sections
-        
-        Args:
-            mcq_max_points: Maximum total points for MCQ section
-            written_max_points: Maximum total points for written section
-            
-        Returns:
-            Tuple of (success, error_message)
-        """
-        if not self.current_template:
-            return False, "No template loaded"
-        
-        if mcq_max_points < 0 or written_max_points < 0:
-            return False, "Max points must be non-negative"
-        
-        if mcq_max_points == 0 and written_max_points == 0:
-            return False, "At least one section must have points"
-        
-        # Get available questions from template
-        page_data = self.template_data.get('page_1', {})
-        
-        bubble_answers = page_data.get('bubble_answers', {})
-        mcq_questions_available = bubble_answers.get('questions_detected', 0)
-        if not mcq_questions_available:
-            mcq_questions_available = len(bubble_answers.get('questions', []))
-        
-        quick_answers = page_data.get('quick_answers', {})
-        written_questions_available = quick_answers.get('total_questions', 0)
-        if not written_questions_available:
-            written_questions_available = len(quick_answers.get('answer_boxes', []))
-        
-        # Validate we can use the sections
-        if mcq_max_points > 0 and mcq_questions_available == 0:
-            return False, "MCQ points specified but template has no MCQ questions"
-        
-        if written_max_points > 0 and written_questions_available == 0:
-            return False, "Written points specified but template has no written answer boxes"
-        
-        # Set the counts and points
-        self.mcq_count = mcq_questions_available if mcq_max_points > 0 else 0
-        self.mcq_max_points = mcq_max_points
-        
-        self.written_count = written_questions_available if written_max_points > 0 else 0
-        self.written_max_points = written_max_points
-        
-        return True, None
     
     def set_mcq_answer(self, question_num, answers):
         """Set answer for an MCQ question"""
-        if not self.current_template:
-            return False, "No template loaded"
-        
-        if self.mcq_count == 0:
-            return False, "MCQ section not configured. Call set_question_counts first."
-        
         if question_num < 1 or question_num > self.mcq_count:
             return False, f"MCQ question number must be between 1 and {self.mcq_count}"
         
@@ -186,13 +77,7 @@ class AnswerKeyFlow:
         return True, None
     
     def set_written_answer(self, question_num, answer):
-        """Set answer for a written answer question"""
-        if not self.current_template:
-            return False, "No template loaded"
-        
-        if self.written_count == 0:
-            return False, "Written answer section not configured. Call set_question_counts first."
-        
+        """Set answer for a written question"""
         written_start = self.mcq_count + 1
         written_end = self.mcq_count + self.written_count
         
@@ -207,133 +92,41 @@ class AnswerKeyFlow:
         self.written_answers[str(question_num)] = numeric_answer
         return True, None
     
-    def set_multiple_mcq_answers(self, answers_dict):
-        """Set answers for multiple MCQ questions at once"""
-        if not self.current_template:
-            return False, "No template loaded"
+    def set_all_mcq_answers(self, answer_pattern):
+        """
+        Set all MCQ answers to a specific pattern
         
-        for q_num, answers in answers_dict.items():
-            success, error = self.set_mcq_answer(int(q_num), answers)
-            if not success:
-                return False, f"MCQ Question {q_num}: {error}"
+        Args:
+            answer_pattern: 'all_A', 'all_B', 'all_C', 'all_D', or 'random'
         
-        return True, None
-    
-    def set_multiple_written_answers(self, answers_dict):
-        """Set answers for multiple written questions at once"""
-        if not self.current_template:
-            return False, "No template loaded"
+        Returns:
+            Tuple of (success, error_message, count_set)
+        """
+        valid_patterns = ['all_A', 'all_B', 'all_C', 'all_D', 'random']
+        if answer_pattern not in valid_patterns:
+            return False, f"Invalid pattern. Must be one of: {', '.join(valid_patterns)}", 0
         
-        for q_num, answer in answers_dict.items():
-            success, error = self.set_written_answer(int(q_num), answer)
-            if not success:
-                return False, f"Written Question {q_num}: {error}"
+        self.mcq_answers.clear()  # Clear existing MCQ answers
         
-        return True, None
-    
-    def parse_mcq_input(self, text_input):
-        """Parse MCQ answers from text input"""
-        if not text_input or not text_input.strip():
-            return False, "Empty input", None
-        
-        parsed = {}
-        entries = re.split(r'\s+', text_input.strip())
-        
-        for entry in entries:
-            if not entry:
-                continue
+        count_set = 0
+        for q_num in range(1, self.mcq_count + 1):
+            if answer_pattern == 'random':
+                # Randomly choose 1-2 answers from A-D
+                num_answers = random.choice([1, 1, 1, 2])  # Mostly single answers, occasional double
+                answers = random.sample(['A', 'B', 'C', 'D'], num_answers)
+                answers.sort()
+            else:
+                # Extract letter from pattern (e.g., 'all_A' -> 'A')
+                letter = answer_pattern.split('_')[1]
+                answers = [letter]
             
-            if ':' not in entry:
-                return False, f"Invalid format: {entry}. Use 'question:answer' format", None
-            
-            parts = entry.split(':', 1)
-            if len(parts) != 2:
-                return False, f"Invalid format: {entry}", None
-            
-            try:
-                q_num = int(parts[0])
-                answers = parts[1]
-                parsed[q_num] = answers
-            except ValueError:
-                return False, f"Invalid question number: {parts[0]}", None
+            self.mcq_answers[str(q_num)] = answers
+            count_set += 1
         
-        return True, None, parsed
-    
-    def parse_written_input(self, text_input):
-        """Parse written answers from text input"""
-        if not text_input or not text_input.strip():
-            return False, "Empty input", None
-        
-        parsed = {}
-        entries = re.split(r'\s+', text_input.strip())
-        
-        for entry in entries:
-            if not entry:
-                continue
-            
-            if ':' not in entry:
-                return False, f"Invalid format: {entry}. Use 'question:answer' format", None
-            
-            parts = entry.split(':', 1)
-            if len(parts) != 2:
-                return False, f"Invalid format: {entry}", None
-            
-            try:
-                q_num = int(parts[0])
-                answer = float(parts[1])
-                parsed[q_num] = answer
-            except ValueError as e:
-                return False, f"Invalid format in {entry}: {str(e)}", None
-        
-        return True, None, parsed
-    
-    def clear_answers(self):
-        """Clear all answers"""
-        self.mcq_answers = {}
-        self.written_answers = {}
-        return True, None
-    
-    def auto_fill_mcq_pattern(self, pattern='sequential'):
-        """Auto-fill MCQ answers with a pattern"""
-        if not self.current_template:
-            return False, "No template loaded"
-        
-        if self.mcq_count == 0:
-            return False, "MCQ section not configured"
-        
-        self.mcq_answers = {}
-        
-        if pattern == 'sequential':
-            options = ['A', 'B', 'C', 'D']
-            for i in range(1, self.mcq_count + 1):
-                self.mcq_answers[str(i)] = [options[(i - 1) % 4]]
-        elif pattern in ['all_a', 'all_b', 'all_c', 'all_d']:
-            answer = pattern.split('_')[1].upper()
-            for i in range(1, self.mcq_count + 1):
-                self.mcq_answers[str(i)] = [answer]
-        else:
-            return False, f"Unknown pattern: {pattern}"
-        
-        return True, None
-    
-    def auto_fill_written_pattern(self, value=0):
-        """Auto-fill written answers with a constant value"""
-        if not self.current_template:
-            return False, "No template loaded"
-        
-        if self.written_count == 0:
-            return False, "Written answer section not configured"
-        
-        self.written_answers = {}
-        written_start = self.mcq_count + 1
-        
-        for i in range(written_start, written_start + self.written_count):
-            self.written_answers[str(i)] = float(value)
-        
-        return True, None
+        return True, None, count_set
     
     def get_progress(self):
-        """Get progress information"""
+        """Get completion progress for this key"""
         mcq_answered = len(self.mcq_answers)
         written_answered = len(self.written_answers)
         
@@ -346,18 +139,19 @@ class AnswerKeyFlow:
         total_answered = mcq_answered + written_answered
         
         return {
+            'key_letter': self.key_letter,
             'mcq': {
                 'answered': mcq_answered,
                 'total': self.mcq_count,
                 'percentage': (mcq_answered / self.mcq_count * 100) if self.mcq_count > 0 else 0,
-                'missing': mcq_missing[:10],
+                'missing': mcq_missing,
                 'is_complete': mcq_answered == self.mcq_count
             },
             'written': {
                 'answered': written_answered,
                 'total': self.written_count,
                 'percentage': (written_answered / self.written_count * 100) if self.written_count > 0 else 0,
-                'missing': written_missing[:10],
+                'missing': written_missing,
                 'is_complete': written_answered == self.written_count
             },
             'overall': {
@@ -368,44 +162,288 @@ class AnswerKeyFlow:
             }
         }
     
-    def validate_answers(self):
-        """Validate that all answers are filled"""
-        progress = self.get_progress()
-        
-        if not progress['mcq']['is_complete']:
-            missing = progress['mcq']['missing']
-            return False, f"Missing {len(missing)} MCQ answers: {', '.join(missing[:5])}", progress
-        
-        if not progress['written']['is_complete']:
-            missing = progress['written']['missing']
-            return False, f"Missing {len(missing)} written answers: {', '.join(missing[:5])}", progress
-        
-        return True, None, progress
+    def to_dict(self):
+        """Convert to dictionary for JSON serialization"""
+        return {
+            'key_letter': self.key_letter,
+            'mcq_answers': self.mcq_answers,
+            'written_answers': self.written_answers
+        }
+
+
+class AnswerKeyFlow:
+    """Handles answer key creation workflow with support for multiple keys (A-E)"""
     
-    def save_answer_key(self, filename=None, exam_name=None, save_directory='files/answer_keys'):
+    def __init__(self):
+        """Initialize the flow"""
+        self.db_ops = get_db_operations()
+        
+        # Exam configuration
+        self.exam_name = None
+        self.num_keys = 0  # 1-5 keys
+        self.mcq_count = 0
+        self.written_count = 0
+        self.mcq_max_points = 0
+        self.written_max_points = 0
+        
+        # Template
+        self.current_template = None
+        self.template_data = None
+        
+        # Answer keys: {key_letter: AnswerKey}
+        self.answer_keys = {}  # {'A': AnswerKey, 'B': AnswerKey, ...}
+        self.current_key_letter = None
+    
+    def configure_exam(self, exam_name, num_keys, mcq_max_points, written_max_points):
         """
-        Save answer key to file and database
+        Configure exam parameters
+        
+        Args:
+            exam_name: Name of the exam
+            num_keys: Number of keys (1-5)
+            mcq_max_points: Maximum points for MCQ section
+            written_max_points: Maximum points for written section
+            
+        Returns:
+            Tuple of (success, error_message)
+        """
+        # Validate inputs
+        if not exam_name or not exam_name.strip():
+            return False, "Exam name cannot be empty"
+        
+        if not isinstance(num_keys, int) or num_keys < 1 or num_keys > 5:
+            return False, "Number of keys must be between 1 and 5"
+        
+        if mcq_max_points < 0 or written_max_points < 0:
+            return False, "Max points must be non-negative"
+        
+        if mcq_max_points == 0 and written_max_points == 0:
+            return False, "At least one section must have points"
+        
+        # Load template if not already loaded
+        if not self.current_template or not self.template_data:
+            return False, "No template loaded"
+        
+        page_data = self.template_data.get('page_1', {})
+        
+        # Get available questions from template
+        mcq_data = page_data.get('mcq', {})
+        mcq_available = len(mcq_data.get('questions', []))
+        
+        qa_data = page_data.get('quick_answers', {})
+        written_available = qa_data.get('total_questions', 0)
+        
+        # Validate sections
+        if mcq_max_points > 0 and mcq_available == 0:
+            return False, "MCQ points specified but template has no MCQ questions"
+        
+        if written_max_points > 0 and written_available == 0:
+            return False, "Written points specified but template has no written answer boxes"
+        
+        # Set configuration
+        self.exam_name = exam_name.strip()
+        self.num_keys = num_keys
+        self.mcq_count = mcq_available if mcq_max_points > 0 else 0
+        self.written_count = written_available if written_max_points > 0 else 0
+        self.mcq_max_points = mcq_max_points
+        self.written_max_points = written_max_points
+        
+        # Create answer key objects for each key letter
+        self.answer_keys = {}
+        key_letters = ['A', 'B', 'C', 'D', 'E']
+        
+        for i in range(num_keys):
+            letter = key_letters[i]
+            self.answer_keys[letter] = AnswerKey(letter, self.mcq_count, self.written_count)
+        
+        # Set current key to first key
+        self.current_key_letter = key_letters[0]
+        
+        return True, None
+    
+    def load_template(self, template_path):
+        """
+        Load a template JSON file
+        
+        Args:
+            template_path: Path to template JSON file
+            
+        Returns:
+            Tuple of (success, error_message, template_info)
+        """
+        # Validate template
+        abs_path = to_absolute_path(template_path)
+        valid, error, data = validate_template_json(abs_path)
+        if not valid:
+            return False, error, None
+        
+        # Extract template information
+        page_data = data.get('page_1', {})
+        
+        # Count MCQ questions
+        mcq_data = page_data.get('mcq', {})
+        mcq_available = len(mcq_data.get('questions', []))
+        
+        # Count written questions
+        qa_data = page_data.get('quick_answers', {})
+        written_available = qa_data.get('total_questions', 0)
+        
+        total_questions = mcq_available + written_available
+        
+        if total_questions == 0:
+            return False, "Template has no questions", None
+        
+        # Get relative path
+        rel_path = os.path.relpath(abs_path, FILES_ROOT).replace("\\", "/")
+        self.current_template = rel_path
+        self.template_data = data
+        
+        template_info = {
+            'path': self.current_template,
+            'total_questions': total_questions,
+            'mcq_questions_available': mcq_available,
+            'written_questions_available': written_available,
+            'name': os.path.basename(self.current_template)
+        }
+        
+        return True, None, template_info
+    
+    def switch_key(self, key_letter):
+        """
+        Switch to a different key for editing
+        
+        Args:
+            key_letter: 'A', 'B', 'C', 'D', or 'E'
+            
+        Returns:
+            Tuple of (success, error_message)
+        """
+        key_letter = key_letter.upper()
+        
+        if key_letter not in self.answer_keys:
+            return False, f"Key '{key_letter}' not configured for this exam"
+        
+        self.current_key_letter = key_letter
+        return True, None
+    
+    def set_mcq_answer(self, question_num, answers):
+        """Set MCQ answer for current key"""
+        if not self.current_key_letter:
+            return False, "No key selected"
+        
+        return self.answer_keys[self.current_key_letter].set_mcq_answer(question_num, answers)
+    
+    def set_written_answer(self, question_num, answer):
+        """Set written answer for current key"""
+        if not self.current_key_letter:
+            return False, "No key selected"
+        
+        return self.answer_keys[self.current_key_letter].set_written_answer(question_num, answer)
+    
+    def set_all_mcq_answers(self, answer_pattern, key_letter=None):
+        """
+        Set all MCQ answers for a key to a specific pattern
+        
+        Args:
+            answer_pattern: 'all_A', 'all_B', 'all_C', 'all_D', or 'random'
+            key_letter: Specific key to set (None for current key)
+            
+        Returns:
+            Tuple of (success, error_message, count_set)
+        """
+        if key_letter is None:
+            if not self.current_key_letter:
+                return False, "No key selected", 0
+            key_obj = self.answer_keys[self.current_key_letter]
+        else:
+            key_letter = key_letter.upper()
+            if key_letter not in self.answer_keys:
+                return False, f"Key '{key_letter}' not found", 0
+            key_obj = self.answer_keys[key_letter]
+        
+        return key_obj.set_all_mcq_answers(answer_pattern)
+    
+    def set_all_mcq_answers_all_keys(self, answer_pattern):
+        """
+        Set all MCQ answers for ALL keys to a specific pattern
+        
+        Args:
+            answer_pattern: 'all_A', 'all_B', 'all_C', 'all_D', or 'random'
+            
+        Returns:
+            Tuple of (success, error_message, results_dict)
+        """
+        if self.mcq_count == 0:
+            return False, "No MCQ questions in this exam", {}
+        
+        results = {}
+        for letter, key_obj in self.answer_keys.items():
+            success, error, count_set = key_obj.set_all_mcq_answers(answer_pattern)
+            results[letter] = {
+                'success': success,
+                'error': error,
+                'count_set': count_set if success else 0
+            }
+        
+        return True, None, results
+    
+    def get_current_key_progress(self):
+        """Get progress for current key"""
+        if not self.current_key_letter:
+            return None
+        
+        return self.answer_keys[self.current_key_letter].get_progress()
+    
+    def get_all_keys_progress(self):
+        """Get progress for all keys"""
+        progress = {}
+        for letter, key in self.answer_keys.items():
+            progress[letter] = key.get_progress()
+        return progress
+    
+    def validate_all_keys(self):
+        """Validate that all keys are complete"""
+        all_complete = True
+        incomplete_keys = []
+        
+        for letter, key in self.answer_keys.items():
+            progress = key.get_progress()
+            if not progress['overall']['is_complete']:
+                all_complete = False
+                incomplete_keys.append(letter)
+        
+        if not all_complete:
+            return False, f"Incomplete keys: {', '.join(incomplete_keys)}", None
+        
+        return True, None, self.get_all_keys_progress()
+    
+    def save_exam_answer_keys(self, filename=None, save_directory='files/answer_keys'):
+        """
+        Save all answer keys for the exam to a single JSON file and database
         
         Args:
             filename: Output filename (None for auto-generate)
-            exam_name: Name of the exam
             save_directory: Directory to save file
             
         Returns:
-            Tuple of (success, error_message, saved_path)
+            Tuple of (success, error_message, result_dict)
+            result_dict contains: {'file_path': str, 'exam_id': int, 'key_ids': dict}
         """
         if not self.current_template:
             return False, "No template loaded", None
         
-        # Validate all answers are filled
-        valid, error, missing = self.validate_answers()
+        if not self.exam_name:
+            return False, "Exam not configured", None
+        
+        # Validate all keys are complete
+        valid, error, progress = self.validate_all_keys()
         if not valid:
             return False, error, None
         
         # Generate filename if not provided
         if not filename:
             timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f"answer_key_{timestamp}.json"
+            filename = f"{self.exam_name.replace(' ', '_')}_{timestamp}.json"
         
         # Validate filename
         valid, error = validate_filename(filename)
@@ -423,115 +461,92 @@ class AnswerKeyFlow:
         # Build full path
         file_path = os.path.join(save_directory, filename)
         
-        # Create MCQ answer key data
-        mcq_key_data = {
+        # Build exam data with all keys (for the complete file)
+        exam_data = {
             'metadata': {
+                'exam_name': self.exam_name,
                 'created_at': datetime.datetime.now().isoformat(),
                 'creation_method': 'manual',
                 'template_used': self.current_template,
-                'total_mcq_questions': self.mcq_count,
-                'mcq_max_points': self.mcq_max_points,
-                'exam_name': exam_name or os.path.splitext(filename)[0]
-            },
-            'answer_key': self.mcq_answers
-        }
-        
-        # Create written answer key data (if any)
-        written_key_data = None
-        if self.written_count > 0:
-            written_key_data = {
-                'metadata': {
-                    'total_written_questions': self.written_count,
-                    'written_max_points': self.written_max_points
-                },
-                'answer_key': self.written_answers
-            }
-        
-        # Combined data structure for file storage
-        combined_data = {
-            'metadata': {
-                'created_at': datetime.datetime.now().isoformat(),
-                'creation_method': 'manual',
-                'template_used': self.current_template,
-                'exam_name': exam_name or os.path.splitext(filename)[0],
+                'total_keys': self.num_keys,
+                'keys_present': list(self.answer_keys.keys()),
                 'total_questions': self.mcq_count + self.written_count,
                 'mcq_count': self.mcq_count,
-                'written_count': self.written_count,
                 'mcq_max_points': self.mcq_max_points,
+                'written_count': self.written_count,
                 'written_max_points': self.written_max_points
             },
-            'mcq_answers': self.mcq_answers if self.mcq_count > 0 else {},
-            'written_answers': self.written_answers if self.written_count > 0 else {}
+            'keys': {}
         }
         
-        # Save to file
+        # Add each key's data
+        for letter, key in self.answer_keys.items():
+            exam_data['keys'][letter] = key.to_dict()
+        
+        # Save complete exam file
         try:
             with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(combined_data, f, indent=2, ensure_ascii=False)
+                json.dump(exam_data, f, indent=2, ensure_ascii=False)
         except Exception as e:
             return False, f"Failed to save file: {str(e)}", None
         
-        # Save to database
+        result = {
+            'file_path': file_path,
+            'exam_id': None,
+            'key_ids': {}
+        }
+        
+        # FIXED: Save to database using import_complete_exam
         if self.db_ops.is_connected():
             try:
-                # DEBUG: Show what we're looking for and what's in the database
-                print(f"[FLOW DEBUG] Looking for template: '{self.current_template}'")
-                
-                cursor = self.db_ops.db.conn.execute(
-                    "SELECT id, name, json_path FROM templates"
-                )
-                print(f"[FLOW DEBUG] Templates in database:")
-                for row in cursor.fetchall():
-                    print(f"[FLOW DEBUG]   ID={row[0]}, name='{row[1]}', path='{row[2]}'")
-                
-                # Get template from database using the normalized path
+                # Get template info from database
                 template_info = self.db_ops.get_template_by_json_path(self.current_template)
                 
                 if not template_info:
-                    print(f"[FLOW] Template not found in database: '{self.current_template}'")
-                    print(f"[FLOW] Warning: Answer key saved to file but not linked to database")
-                    print(f"[FLOW] File saved successfully at: {file_path}")
-                    return True, None, file_path
+                    print(f"[FLOW] Warning: Template not found in database: {self.current_template}")
+                    print(f"[FLOW] Complete exam file saved to: {file_path}")
+                    print(f"[FLOW] Use import_complete_exam to add to database later")
+                    return True, None, result
                 
-                # Save answer key to database
-                key_name = combined_data['metadata']['exam_name']
-                
-                # Normalize the answer key path too
-                rel_key_path = os.path.relpath(file_path, FILES_ROOT).replace("\\", "/")
-                
-                key_id = self.db_ops.save_answer_key(
+                # Use import_complete_exam to split and save individual keys
+                import_result = self.db_ops.import_complete_exam(
+                    exam_file_path=file_path,
                     template_id=template_info['id'],
-                    name=key_name,
-                    json_path=rel_key_path,
-                    key_data=mcq_key_data,
-                    written_key_data=written_key_data,
-                    created_by='manual'
+                    output_dir=save_directory
                 )
                 
-                if key_id:
-                    print(f"[FLOW] Answer key saved to database (ID: {key_id})")
+                if import_result:
+                    exam_id, key_ids = import_result
+                    result['exam_id'] = exam_id
+                    result['key_ids'] = key_ids
+                    print(f"[FLOW] Exam saved to database (Exam ID: {exam_id})")
+                    print(f"[FLOW] Individual keys saved: {list(key_ids.keys())}")
                 else:
-                    print(f"[FLOW] Warning: Failed to save to database, but file saved")
-                    
+                    print(f"[FLOW] Warning: Failed to save to database")
+                    print(f"[FLOW] Complete exam file saved to: {file_path}")
+                        
             except Exception as e:
-                print(f"[FLOW] Database save failed: {e}")
+                print(f"[FLOW] Database save warning: {e}")
                 import traceback
                 traceback.print_exc()
-                print(f"[FLOW] File saved successfully at: {file_path}")
+        else:
+            print(f"[FLOW] Database not connected - file saved locally only")
         
-        return True, None, file_path
+        return True, None, result  # result contains {'file_path': str, 'exam_id': int, 'key_ids': dict}
     
-    def get_answer_key_data(self):
-        """Get current answer key data"""
+    def get_exam_data(self):
+        """Get current exam configuration and answers"""
         return {
+            'exam_name': self.exam_name,
             'template': self.current_template,
+            'num_keys': self.num_keys,
             'mcq_count': self.mcq_count,
             'written_count': self.written_count,
             'mcq_max_points': self.mcq_max_points,
             'written_max_points': self.written_max_points,
-            'mcq_answers': self.mcq_answers.copy(),
-            'written_answers': self.written_answers.copy(),
-            'progress': self.get_progress()
+            'current_key': self.current_key_letter,
+            'keys_data': {letter: key.to_dict() for letter, key in self.answer_keys.items()},
+            'progress': self.get_all_keys_progress()
         }
 
 

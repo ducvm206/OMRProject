@@ -11,7 +11,6 @@ import numpy as np
 from datetime import datetime
 
 # Add project root to path
-# At top of file (already exists)
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FILES_ROOT = os.path.join(PROJECT_ROOT, "files")
 
@@ -74,23 +73,47 @@ class GradingFlow:
                 pass
 
         page_data = data.get("page_1", {})
-        # Get bubble_answers questions count
-        bubble_count = page_data.get("bubble_answers", {}).get("questions_detected", 0)
-        quick_count = page_data.get("quick_answers", {}).get("total_questions", 0)
-        total_q = bubble_count + quick_count
+        
+        # FIX: Check both possible keys for MCQ questions
+        # Template uses "mcq" but code expects "bubble_answers"
+        mcq_section = page_data.get("mcq", {}) or page_data.get("bubble_answers", {})
+        quick_section = page_data.get("quick_answers", {})
+        
+        # Get MCQ count - check multiple possible keys
+        mcq_count = 0
+        if "questions_detected" in mcq_section:
+            mcq_count = mcq_section.get("questions_detected", 0)
+        elif "questions" in mcq_section:
+            mcq_count = len(mcq_section.get("questions", []))
+        
+        # Get written count
+        written_count = quick_section.get("total_questions", 0)
+        total_q = mcq_count + written_count
         
         info = {
             "path": template_path,
             "total_questions": total_q,
+            "mcq_questions": mcq_count,
+            "written_questions": written_count,
             "has_student_id": bool(page_data.get("student_id")),
             "name": os.path.basename(template_path)
         }
+        
+        print(f"[FLOW] Template loaded: {mcq_count} MCQ, {written_count} written = {total_q} total")
         return True, None, info
 
     def load_answer_key(self, key_path):
         """Load and validate answer key JSON"""
         abs_path = to_absolute_path(key_path)
-        valid, error, data = validate_answer_key_json(abs_path)
+        
+        # FIXED: validate_answer_key_json returns 4 values (valid, error, data, key_type)
+        # Default to checking for complete exam format first
+        valid, error, data, key_type = validate_answer_key_json(abs_path, is_complete_exam=True)
+        
+        # If complete exam validation fails, try individual key format
+        if not valid:
+            valid, error, data, key_type = validate_answer_key_json(abs_path, is_complete_exam=False)
+        
         if not valid:
             return False, error, None
 
@@ -109,13 +132,20 @@ class GradingFlow:
         meta = data.get("metadata", {})
         exam_name = meta.get("exam_name", os.path.splitext(os.path.basename(key_path))[0])
         total_questions = meta.get("total_questions", 0)
+        mcq_count = meta.get("mcq_count", 0)
+        written_count = meta.get("written_count", 0)
         
         key_info = {
             "path": key_path,
             "exam_name": exam_name,
             "total_questions": total_questions,
-            "name": os.path.basename(key_path)
+            "mcq_count": mcq_count,
+            "written_count": written_count,
+            "name": os.path.basename(key_path),
+            "key_type": key_type  # Add key_type to info
         }
+        
+        print(f"[FLOW] Answer key loaded: {exam_name}, {total_questions} questions ({mcq_count} MCQ, {written_count} written), Type: {key_type}")
         return True, None, key_info
 
     def set_threshold(self, threshold):
@@ -200,11 +230,94 @@ class GradingFlow:
             self.current_results = result
 
             # 6) Save to DB if available
-            if self.db_ops.is_connected() and self.answer_key_id:
+            if self.db_ops.is_connected():
                 try:
-                    exam_name = self.answer_key_data.get("metadata", {}).get("exam_name", "Exam")
+                    metadata = self.answer_key_data.get("metadata", {})
+                    exam_name = metadata.get("exam_name", "Exam")
+                    mcq_max_points = metadata.get("mcq_max_points", 0.0)
+                    written_max_points = metadata.get("written_max_points", 0.0)
+                    max_score = mcq_max_points + written_max_points
+                    
+                    # Extract student_key from extraction_result
+                    answer_key_info = extraction_result.get("answer_key", {})
+                    if isinstance(answer_key_info, dict):
+                        student_key = answer_key_info.get("answer_key")
+                    else:
+                        student_key = answer_key_info
+                        
+                    # If no key detected, default to 'A'
+                    if not student_key:
+                        student_key = 'A'
+                        print(f"[FLOW] No answer key detected in sheet, defaulting to: {student_key}")
+                    
+                    key_letter = str(student_key).upper() if student_key else 'A'
+                    
+                    # 1. Get or create exam
+                    exam = self.db_ops.get_exam_by_name(exam_name)
+                    if exam:
+                        exam_id = exam['id']
+                    else:
+                        exam_id = self.db_ops.save_exam(
+                            name=exam_name,
+                            description=f"Created from grading",
+                            max_score=max_score
+                        )
+                    
+                    # 2. Get or create answer key for this exam
+                    key_id = None
+                    if exam_id:
+                        # First try to find existing answer key for this exam and label
+                        existing_key = self.db_ops.get_answer_key_by_exam_and_label(exam_id, key_letter)
+                        if existing_key:
+                            key_id = existing_key['id']
+                            print(f"[FLOW] Found existing answer key: ID={key_id}")
+                        else:
+                            # Create a new answer key record
+                            key_data = {
+                                'metadata': {
+                                    'exam_name': exam_name,
+                                    'key_label': key_letter,
+                                    'mcq_count': metadata.get('mcq_count', 0),
+                                    'mcq_max_points': mcq_max_points,
+                                    'written_count': metadata.get('written_count', 0),
+                                    'written_max_points': written_max_points,
+                                    'total_max_points': max_score,
+                                    'created_at': datetime.now().isoformat()
+                                },
+                                'mcq': {
+                                    'answer_key': self.answer_key_data.get('keys', {}).get(key_letter, {}).get('mcq_answers', {})
+                                },
+                                'written': {
+                                    'answer_key': self.answer_key_data.get('keys', {}).get(key_letter, {}).get('written_answers', {})
+                                }
+                            }
+                            
+                            # Get template ID if not already set
+                            template_id = self.template_id
+                            if not template_id:
+                                rel_template = to_relative_path(self.template_path)
+                                tinfo = self.db_ops.get_template_by_json_path(rel_template)
+                                if tinfo:
+                                    template_id = tinfo.get("id")
+                            
+                            if template_id:
+                                # Save answer key
+                                key_id = self.db_ops.save_answer_key(
+                                    template_id=template_id,
+                                    exam_id=exam_id,
+                                    name=f"{exam_name} - Key {key_letter}",
+                                    label=key_letter,
+                                    json_path=self.answer_key_path,  # Use original answer key path
+                                    key_data=key_data,
+                                    created_by='grading'
+                                )
+                                print(f"[FLOW] Created new answer key: ID={key_id}")
+                    
+                    # 3. Save graded sheet with BOTH exam_id AND key_id
+                    print(f"[FLOW] Saving graded sheet with exam_id={exam_id}, key_id={key_id}")
+                    
                     graded_sheet_id = self.db_ops.save_graded_sheet(
-                        key_id=self.answer_key_id,
+                        exam_id=exam_id,
                         student_id=student_id,
                         exam_name=exam_name,
                         filled_sheet_path=to_relative_path(image_path),
@@ -216,13 +329,22 @@ class GradingFlow:
                         written_correct_count=summary.get("written_correct", 0),
                         written_wrong_count=summary.get("written_incorrect", 0),
                         written_blank_count=summary.get("written_blank", 0),
-                        score=summary.get("score", 0.0),  # ADD THIS LINE
+                        score=summary.get("score", 0.0),
+                        max_score=max_score,
+                        key_id=key_id,  # Pass key_id parameter
                         threshold=self.threshold
                     )
+                    
                     if graded_sheet_id:
+                        print(f"[FLOW] Successfully saved graded sheet with ID: {graded_sheet_id}")
                         self._save_question_results(graded_sheet_id, grade_results, extraction_result)
+                    else:
+                        print(f"[FLOW] Failed to save graded sheet")
+                            
                 except Exception as e:
                     print(f"[FLOW] DB save error: {e}")
+                    import traceback
+                    traceback.print_exc()
 
             return True, None, result
 
@@ -233,11 +355,43 @@ class GradingFlow:
 
     def _grade_with_key(self, key_data, extraction_result, partial_mcq=True, written_tolerance=0.0):
         """
-        Grade using answer key - UPDATED for extraction_flow structure
+        Grade using answer key - UPDATED for the new answer key format
         """
         meta = key_data["metadata"]
-        mcq_key = key_data["mcq_answers"]
-        written_key = key_data["written_answers"]
+        
+        # FIX: Get the selected key version from extraction result
+        student_key = None
+        key_info = extraction_result.get("answer_key", {})
+        if isinstance(key_info, dict):
+            student_key = key_info.get("answer_key")
+        elif isinstance(key_info, str):
+            student_key = key_info
+        
+        # If no key detected, default to first available key
+        if not student_key:
+            keys_present = meta.get("keys_present", ["A"])
+            student_key = keys_present[0]
+            print(f"[FLOW] No key detected, defaulting to: {student_key}")
+        
+        print(f"[FLOW] Using answer key version: {student_key}")
+        
+        # Get the correct key version from the keys object
+        keys_block = key_data.get("keys", {})
+        if student_key not in keys_block:
+            # Try uppercase
+            student_key = student_key.upper()
+            if student_key not in keys_block:
+                # Fallback to first available key
+                available_keys = list(keys_block.keys())
+                if available_keys:
+                    student_key = available_keys[0]
+                    print(f"[FLOW] Key {student_key} not found, using: {student_key}")
+                else:
+                    raise ValueError(f"No answer keys found in the answer key file")
+        
+        correct_key = keys_block[student_key]
+        mcq_key = correct_key.get("mcq_answers", {})
+        written_key = correct_key.get("written_answers", {})
 
         # Extract from extraction_result
         mcq_data = extraction_result.get("multiple_choice_answers", {})
@@ -254,6 +408,7 @@ class GradingFlow:
 
         results = {
             "summary": {
+                "student_key": student_key,
                 "total_questions": meta["total_questions"],
                 "mcq_correct": 0,
                 "mcq_incorrect": 0,
@@ -373,7 +528,7 @@ class GradingFlow:
                 q_num = int(q_num)
             except:
                 continue
-            adjusted_q = q_num + mcq_count
+            adjusted_q = mcq_count + q_num  # Written questions start after MCQ
             written_dict[str(adjusted_q)] = item.get("answer", "")
 
         for q_str, correct_value in written_key.items():
@@ -438,6 +593,7 @@ class GradingFlow:
 
         # Debug Summary
         print(f"\n[DEBUG GRADE] Final Summary:")
+        print(f"  Answer Key Used: {student_key}")
         print(f"  MCQ: {results['summary']['mcq_correct']} correct, {results['summary']['mcq_incorrect']} incorrect, {results['summary']['mcq_blank']} blank")
         print(f"  Written: {results['summary']['written_correct']} correct, {results['summary']['written_incorrect']} incorrect, {results['summary']['written_blank']} blank")
         print(f"  Score: {results['summary']['score']} / {max_points} ({results['summary']['percentage']}%)")
@@ -445,7 +601,7 @@ class GradingFlow:
         return results
 
     def _create_annotated_image(self, image_path, extraction_result, grade_results, processor):
-        """Annotate image with grading results - UPDATED for extraction_flow"""
+        """Annotate image with grading results - RGB colors, single circle per bubble"""
         try:
             img_bgr = cv2.imread(image_path)
             if img_bgr is None:
@@ -486,9 +642,20 @@ class GradingFlow:
             quick_data = extraction_result.get("quick_answers", {})
             quick_extraction = quick_data.get("quick_answers", [])
 
-            # Draw MCQ bubbles
-            bubble_answers = page1.get("bubble_answers", {})
-            questions = bubble_answers.get("questions", [])
+            # Color definitions in RGB format (correct for OpenCV since we're using RGB image)
+            GREEN = (0, 255, 0)      # Correct MCQ answers (R=0, G=255, B=0)
+            RED = (255, 0, 0)        # Wrong MCQ answers (R=255, G=0, B=0)  
+            BLUE = (0, 0, 255)       # Selected answer key (R=0, G=0, B=255)
+            MAGENTA = (255, 0, 255)  # Student ID digits (R=255, G=0, B=255)
+            ORANGE = (255, 165, 0)   # Partial credit (R=255, G=165, B=0)
+            GRAY = (128, 128, 128)   # Blank (R=128, G=128, B=128)
+            YELLOW = (255, 255, 0)   # Other (R=255, G=255, B=0)
+
+            # --------------------------
+            # 1. Draw MCQ bubbles with colors - SINGLE THIN CIRCLE
+            # --------------------------
+            mcq_section = page1.get("mcq", {}) or page1.get("bubble_answers", {})
+            questions = mcq_section.get("questions", [])
 
             for q in questions:
                 qnum = q.get("question_number")
@@ -501,21 +668,15 @@ class GradingFlow:
                     sel = ext_q.get("selected", [])
                 selected_answers = [str(x).upper() for x in (sel or [])]
 
-                if not selected_answers:
-                    continue
-
                 q_status = status_map.get(q_str)
-                if q_status == "correct":
-                    color = (0, 255, 0)  # Green
-                elif q_status == "partial":
-                    color = (0, 165, 255)  # Orange
-                elif q_status == "incorrect":
-                    color = (255, 0, 0)  # Red
-                elif q_status == "blank":
-                    color = (255, 255, 0)  # Yellow
-                else:
-                    continue
+                
+                # Get correct answers from grade results
+                correct_answers = set()
+                if qnum in details:
+                    correct_set = details[qnum].get("correct", [])
+                    correct_answers = set(str(x).upper() for x in correct_set)
 
+                # Draw each selected bubble
                 for b in bubbles:
                     label = str(b.get("label", "")).upper()
                     if label not in selected_answers:
@@ -532,9 +693,98 @@ class GradingFlow:
                     y_px = int(by * sy)
                     r_px = int(br * ((sx + sy) / 2.0))
 
-                    cv2.circle(img_rgb, (x_px, y_px), max(3, r_px), color, 4)
+                    # Determine color based on correctness - using RGB colors
+                    if q_status == "correct" and label in correct_answers:
+                        color = GREEN  # Correct MCQ answer
+                    elif q_status == "incorrect":
+                        color = RED    # Wrong MCQ answer
+                    elif q_status == "partial":
+                        color = ORANGE # Partial credit
+                    elif q_status == "blank":
+                        color = GRAY   # Blank
+                    else:
+                        color = YELLOW # Other
 
-            # Draw written answer boxes
+                    # Draw SINGLE thin circle right at the bubble edge
+                    # Just 1-2 pixels outside the bubble, thickness 1-2
+                    circle_radius = r_px + 1  # Very close to bubble edge
+                    line_thickness = 2  # Slightly thicker for better visibility
+                    cv2.circle(img_rgb, (x_px, y_px), circle_radius, color, line_thickness)
+
+            # --------------------------
+            # 2. Draw answer key bubbles (BLUE) - SINGLE THIN CIRCLE
+            # --------------------------
+            key_section = page1.get("key", [])
+            if key_section:
+                # Try to extract which key was selected
+                answer_key_data = extraction_result.get("answer_key", {})
+                selected_key = answer_key_data.get("answer_key", "")
+                
+                if selected_key and key_section:
+                    try:
+                        # Convert key letter to index (A=0, B=1, C=2, etc.)
+                        key_index = ord(selected_key.upper()) - 65
+                        if 0 <= key_index < len(key_section):
+                            key_bubble = key_section[key_index]
+                            bx = key_bubble.get("x")
+                            by = key_bubble.get("y")
+                            br = key_bubble.get("radius", 35)
+                            
+                            if bx is not None and by is not None:
+                                x_px = int(bx * sx)
+                                y_px = int(by * sy)
+                                r_px = int(br * ((sx + sy) / 2.0))
+                                
+                                # Draw SINGLE thin blue circle
+                                circle_radius = r_px + 2  # Slightly more visible for key
+                                cv2.circle(img_rgb, (x_px, y_px), circle_radius, BLUE, 2)
+                    except Exception as e:
+                        print(f"[VIS] Error drawing key bubble: {e}")
+
+            # --------------------------
+            # 3. Draw student ID bubbles (MAGENTA) - SINGLE THIN CIRCLE
+            # --------------------------
+            sid_result = extraction_result.get("student_id", {})
+            digit_details = sid_result.get("digit_details", [])
+
+            digit_selections = {}
+            for d in digit_details:
+                pos = d.get("position")
+                digit = d.get("digit")
+                if pos is not None and digit is not None:
+                    digit_selections[str(pos - 1)] = digit
+
+            student_id_template = page1.get("student_id", {})
+            digit_columns = student_id_template.get("digit_columns", [])
+
+            for col_index, col_data in enumerate(digit_columns):
+                bubbles = col_data.get("bubbles", [])
+                selected_digit = digit_selections.get(str(col_index))
+                if selected_digit is None:
+                    continue
+
+                for bubble in bubbles:
+                    if str(bubble.get("digit")) != str(selected_digit):
+                        continue
+
+                    bx = bubble.get("x")
+                    by = bubble.get("y")
+                    br = bubble.get("radius", 30)
+
+                    if bx is None or by is None:
+                        continue
+
+                    x_px = int(bx * sx)
+                    y_px = int(by * sy)
+                    r_px = int(br * ((sx + sy) / 2.0))
+
+                    # Draw SINGLE thin magenta circle
+                    circle_radius = r_px + 1
+                    cv2.circle(img_rgb, (x_px, y_px), circle_radius, MAGENTA, 2)
+
+            # --------------------------
+            # 4. Draw written answer boxes - THIN BORDERS
+            # --------------------------
             quick_section = page1.get("quick_answers", {}) or {}
             answer_boxes = quick_section.get("answer_boxes", [])
             mcq_count = int(self.answer_key_data.get("metadata", {}).get("mcq_count", 0))
@@ -565,11 +815,11 @@ class GradingFlow:
 
                 status = status_map.get(q_str)
                 if status == "correct":
-                    color = (0, 255, 0)  # Green
+                    color = GREEN  # Green for correct written
                 elif status == "incorrect":
-                    color = (255, 0, 0)  # Red
+                    color = RED    # Red for incorrect written
                 elif status == "blank":
-                    color = (255, 255, 0)  # Yellow
+                    color = GRAY   # Gray for blank
                 else:
                     continue
 
@@ -594,52 +844,8 @@ class GradingFlow:
                     x2 = int((bx + bw) * sx)
                     y2 = int((by + bh) * sy)
 
-                cv2.rectangle(img_rgb, (x1, y1), (x2, y2), color, 4)
-            # ---- DRAW STUDENT ID BUBBLES (PURPLE) ----
-            sid_result = extraction_result.get("student_id", {})
-            digit_details = sid_result.get("digit_details", [])
-
-            digit_selections = {}
-
-            for d in digit_details:
-                # Convert from 1-based positions to 0-based column index
-                pos = d.get("position")
-                digit = d.get("digit")
-
-                if pos is None or digit is None:
-                    continue
-
-                digit_selections[str(pos - 1)] = digit
-
-            student_id_template = page1.get("bubble_answers", {}).get("student_id", {})
-            digit_columns = student_id_template.get("digit_columns", [])
-
-            PURPLE = (256, 0, 256)
-
-            for col_index, col_data in enumerate(digit_columns):
-                bubbles = col_data.get("bubbles", [])
-
-                selected_digit = digit_selections.get(str(col_index))
-                if selected_digit is None:
-                    continue
-
-                for bubble in bubbles:
-                    if str(bubble.get("digit")) != str(selected_digit):
-                        continue
-
-                    bx = bubble.get("x")
-                    by = bubble.get("y")
-                    br = bubble.get("radius", 30)
-
-                    if bx is None or by is None:
-                        continue
-
-                    x_px = int(bx * sx)
-                    y_px = int(by * sy)
-                    r_px = int(br * ((sx + sy) / 2.0))
-
-                    # Draw purple circle
-                    cv2.circle(img_rgb, (x_px, y_px), max(3, r_px), PURPLE, 4)
+                # Draw thin rectangle
+                cv2.rectangle(img_rgb, (x1, y1), (x2, y2), color, 2)         
             return img_rgb
 
         except Exception as e:

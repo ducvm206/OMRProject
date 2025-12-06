@@ -31,6 +31,7 @@ class SheetGenerationUI:
         self.mcq_questions_var = StringVar(value="40")
         self.written_questions_var = StringVar(value="0")
         self.student_id_var = BooleanVar(value=True)
+        self.key_var = BooleanVar(value=True)  # New: KEY area toggle
         self.class_info_var = BooleanVar(value=True)
         self.timestamp_var = BooleanVar(value=False)
         self.output_dir_var = StringVar(value="blank_sheets")
@@ -121,10 +122,26 @@ class SheetGenerationUI:
         
         tk.Label(inner, text="⚙️ Additional Options",
                 font=("Segoe UI", 11, "bold"), bg=self.CARD_COLOR, fg="#333").pack(anchor="w", pady=(0,15))
-        ttk.Checkbutton(inner, text="Include Student ID Field", variable=self.student_id_var).pack(anchor=tk.W, pady=5)
-        ttk.Checkbutton(inner, text="Include Class Information", variable=self.class_info_var).pack(anchor=tk.W, pady=5)
-        ttk.Checkbutton(inner, text="Include Timestamp", variable=self.timestamp_var).pack(anchor=tk.W, pady=5)
-        ttk.Checkbutton(inner, text="Auto-extract template after generation", variable=self.auto_extract_var).pack(anchor=tk.W, pady=5)
+        
+        # Create a grid layout for checkboxes
+        options_grid = tk.Frame(inner, bg=self.CARD_COLOR)
+        options_grid.pack(fill=tk.X, pady=5)
+        
+        # Left column
+        left_col = tk.Frame(options_grid, bg=self.CARD_COLOR)
+        left_col.pack(side=tk.LEFT, fill=tk.Y, expand=True)
+        ttk.Checkbutton(left_col, text="Include Student ID Field", variable=self.student_id_var).pack(anchor=tk.W, pady=5)
+        ttk.Checkbutton(left_col, text="Include KEY Area", variable=self.key_var).pack(anchor=tk.W, pady=5)
+        
+        # Right column
+        right_col = tk.Frame(options_grid, bg=self.CARD_COLOR)
+        right_col.pack(side=tk.RIGHT, fill=tk.Y, expand=True)
+        ttk.Checkbutton(right_col, text="Include Class Information", variable=self.class_info_var).pack(anchor=tk.W, pady=5)
+        ttk.Checkbutton(right_col, text="Include Timestamp", variable=self.timestamp_var).pack(anchor=tk.W, pady=5)
+        
+        # Auto-extract on bottom
+        ttk.Checkbutton(inner, text="Auto-extract template after generation", 
+                       variable=self.auto_extract_var).pack(anchor=tk.W, pady=(15, 5))
     
     def create_output_card(self, parent):
         card = tk.Frame(parent, bg=self.CARD_COLOR)
@@ -186,33 +203,56 @@ class SheetGenerationUI:
             mcq = self.mcq_questions_var.get()
             written = self.written_questions_var.get()
             if mcq.isdigit() and written.isdigit():
+                # Create a descriptive filename based on settings
+                parts = []
                 if int(written) > 0:
-                    self.filename_var.set(f"answer_sheet_{mcq}mcq_{written}written.pdf")
+                    parts.append(f"{mcq}mcq_{written}written")
                 else:
-                    self.filename_var.set(f"answer_sheet_{mcq}_questions.pdf")
+                    parts.append(f"{mcq}mcq")
+                
+                # Add flags for missing sections
+                if not self.student_id_var.get():
+                    parts.append("no_id")
+                if not self.key_var.get():
+                    parts.append("no_key")
+                
+                filename = f"answer_sheet_{'_'.join(parts)}.pdf"
+                self.filename_var.set(filename)
         except: pass
     
-    def auto_generate_filename(self): self.update_filename_preview()
+    def auto_generate_filename(self): 
+        self.update_filename_preview()
     
     def on_browse_directory(self):
         directory = select_directory(title="Select Output Directory", initial_dir=get_project_root(), return_relative=False)
-        if directory: self.output_dir_var.set(directory)
+        if directory: 
+            # Convert to relative path if it's within the project
+            if directory.startswith(get_project_root()):
+                rel_path = os.path.relpath(directory, get_project_root())
+                if rel_path.startswith("files"):
+                    directory = rel_path.split(os.sep)[-1] if os.sep in rel_path else rel_path
+            
+            self.output_dir_var.set(directory)
     
     def on_generate(self):
+        # Configure sheet with all options
         success, error = self.flow.configure_sheet(
             num_mcq_questions=self.mcq_questions_var.get(),
             num_written_questions=self.written_questions_var.get(),
             include_student_id=self.student_id_var.get(),
+            include_key=self.key_var.get(),  # Pass KEY setting
             include_class_info=self.class_info_var.get(),
             include_timestamp=self.timestamp_var.get()
         )
-        if not success: return messagebox.showerror("Error", error)
+        if not success: 
+            return messagebox.showerror("Error", error)
         
         success, error = self.flow.set_output_location(
             directory=self.output_dir_var.get(),
             filename=self.filename_var.get()
         )
-        if not success: return messagebox.showerror("Error", error)
+        if not success: 
+            return messagebox.showerror("Error", error)
         
         self.status_var.set("Generating answer sheet...")
         self.progress_bar.start()
@@ -232,9 +272,25 @@ class SheetGenerationUI:
             self.status_var.set("Success!")
             self.update_preview(pdf_path)
             msg = f"PDF saved as: {pdf_path}\n"
-            if template_path: msg += f"Template saved as: {template_path}\n"
+            if template_path: 
+                msg += f"Template saved as: {template_path}\n"
+            
+            # Show configuration summary
             info = self.flow.get_generation_info()
-            if info['sheet_id'] and info['template_id']: msg += f"DB: Sheet #{info['sheet_id']} → Template #{info['template_id']}"
+            config_summary = []
+            if not info['include_student_id']:
+                config_summary.append("No Student ID")
+            if not info['include_key']:
+                config_summary.append("No KEY")
+            if not info['include_class_info']:
+                config_summary.append("No class info")
+            
+            if config_summary:
+                msg += f"Configuration: {', '.join(config_summary)}\n"
+            
+            if info['sheet_id'] and info['template_id']: 
+                msg += f"DB: Sheet #{info['sheet_id']} → Template #{info['template_id']}"
+            
             messagebox.showinfo("Success", msg)
         else:
             self.status_var.set("Error during generation")
@@ -245,6 +301,7 @@ class SheetGenerationUI:
         self.mcq_questions_var.set("40")
         self.written_questions_var.set("0")
         self.student_id_var.set(True)
+        self.key_var.set(True)  # Reset KEY toggle
         self.class_info_var.set(True)
         self.timestamp_var.set(False)
         self.auto_extract_var.set(True)

@@ -1,5 +1,5 @@
 """
-extraction_flow.py - Unified Answer Sheet Extraction Pipeline
+answer_extraction.py - Unified Answer Sheet Extraction Pipeline
 
 This module provides a complete extraction workflow that combines:
 1. Student ID extraction (from extraction.py)
@@ -35,11 +35,13 @@ try:
     # Try absolute import first
     from core.answer_extraction.bubble_answer_extraction import BubbleTemplate, AnswerSheetExtractor
     from core.answer_extraction.quick_answer_extraction import QuickAnswerExtraction
+    from core.answer_extraction.key_extraction import KeyExtractor
 except ImportError:
     try:
         # Try relative import
         from .bubble_answer_extraction import BubbleTemplate, AnswerSheetExtractor
         from .quick_answer_extraction import QuickAnswerExtraction
+        from .key_extraction import KeyExtractor
     except ImportError:
         # Fallback: Add project root to path
         PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -47,6 +49,7 @@ except ImportError:
             sys.path.insert(0, PROJECT_ROOT)
         from core.answer_extraction.bubble_answer_extraction import BubbleTemplate, AnswerSheetExtractor
         from core.answer_extraction.quick_answer_extraction import QuickAnswerExtraction
+        from core.answer_extraction.key_extraction import KeyExtractor
 
 def convert_numpy(o):
     """Convert numpy types to Python native types for JSON serialization."""
@@ -102,6 +105,9 @@ class AnswerSheetProcessor:
         else:
             print("[INFO] No CNN model provided - quick answers will be skipped")
         
+        # Initialize key extractor
+        self.key_extractor = KeyExtractor()
+        
         print(f"[SUCCESS] Processor initialized")
         print(f"  Template: {os.path.basename(template_path)}")
         
@@ -114,7 +120,8 @@ class AnswerSheetProcessor:
         print(f"  Quick Answer Support: {'Enabled' if self.quick_extractor else 'Disabled'}")
     
     def process_sheet(self, image_path, threshold_percent=50, debug=False, 
-                     extract_id=True, extract_mc=True, extract_quick=True):
+                     extract_id=True, extract_mc=True, extract_quick=True,
+                     extract_key=True):
         """
         Complete extraction pipeline for a filled answer sheet.
         
@@ -125,6 +132,7 @@ class AnswerSheetProcessor:
             extract_id: Extract student ID
             extract_mc: Extract multiple choice answers
             extract_quick: Extract quick answers (requires CNN model)
+            extract_key: Extract answer key (requires key template)
             
         Returns:
             Dictionary containing all extraction results
@@ -134,7 +142,7 @@ class AnswerSheetProcessor:
         print(f"{'='*70}")
         print(f"Image: {os.path.basename(image_path)}")
         print(f"Threshold: {threshold_percent}%")
-        print(f"Extraction modes: ID={extract_id}, MC={extract_mc}, Quick={extract_quick}")
+        print(f"Extraction modes: ID={extract_id}, MC={extract_mc}, Quick={extract_quick}, Key={extract_key}")
         
         # Validate image exists
         if not os.path.exists(image_path):
@@ -147,9 +155,29 @@ class AnswerSheetProcessor:
             print(f"[ERROR] Could not load image: {image_path}")
             return None
         
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        target_height, target_width = image.shape[:2]
-        print(f"Image dimensions: {target_width}x{target_height}")
+        # Store original dimensions
+        original_height, original_width = image.shape[:2]
+        print(f"Original image dimensions: {original_width}x{original_height}")
+        
+        # ========================================
+        # RESIZE IMAGE TO STANDARD DIMENSIONS
+        # ========================================
+        # Resize to 1700x2200 for consistent processing
+        target_processing_width = 1700
+        target_processing_height = 2200
+        
+        image_resized = cv2.resize(image, (target_processing_width, target_processing_height), 
+                                   interpolation=cv2.INTER_CUBIC)
+        
+        print(f"Resized for processing: {target_processing_width}x{target_processing_height}")
+        
+        gray = cv2.cvtColor(image_resized, cv2.COLOR_BGR2GRAY)
+        target_height, target_width = image_resized.shape[:2]
+        
+        # Initialize local variables for visualization
+        scaled_questions = None
+        scaled_id_template = None
+        questions = None
         
         # Initialize result structure
         result = {
@@ -158,25 +186,31 @@ class AnswerSheetProcessor:
                 'processed_at': datetime.now().isoformat(),
                 'template_used': self.template_path,
                 'threshold_percent': threshold_percent,
-                'image_dimensions': {
-                    'width': target_width,
-                    'height': target_height
+                'original_image_dimensions': {
+                    'width': original_width,
+                    'height': original_height
+                },
+                'processing_image_dimensions': {
+                    'width': target_processing_width,
+                    'height': target_processing_height
                 }
             },
             'student_id': None,
             'multiple_choice_answers': None,
             'quick_answers': None,
+            'answer_key': None,
             'extraction_summary': {
                 'student_id_extracted': False,
                 'mc_extracted': False,
-                'quick_extracted': False
+                'quick_extracted': False,
+                'key_extracted': False
             }
         }
         
         # ========================================
         # 1. EXTRACT STUDENT ID
         # ========================================
-        if extract_id and self.bubble_template.id_template:
+        if extract_id and self.bubble_template and self.bubble_template.id_template:
             print(f"\n{'='*70}")
             print("STEP 1: EXTRACTING STUDENT ID")
             print(f"{'='*70}")
@@ -203,26 +237,26 @@ class AnswerSheetProcessor:
                 print(f"[ERROR] Student ID extraction failed: {e}")
                 result['student_id'] = {'error': str(e)}
         
-        elif extract_id and not self.bubble_template.id_template:
+        elif extract_id and (not self.bubble_template or not self.bubble_template.id_template):
             print("\n[INFO] Student ID extraction skipped - no ID template in sheet")
         
         # ========================================
         # 2. EXTRACT MULTIPLE CHOICE ANSWERS
         # ========================================
-        if extract_mc and self.bubble_template.questions:
+        if extract_mc and self.bubble_template and self.bubble_template.questions:
             print(f"\n{'='*70}")
             print("STEP 2: EXTRACTING MULTIPLE CHOICE ANSWERS")
             print(f"{'='*70}")
             
             try:
-                # Scale questions to match image
+                # Scale questions to match resized image
                 scaled_questions = self.mc_extractor.scale_questions(
                     target_width, target_height
                 )
                 
                 # Extract answers
                 questions = self.mc_extractor.extract_answers(
-                    image, gray, scaled_questions, threshold_percent
+                    image_resized, gray, scaled_questions, threshold_percent
                 )
                 
                 # Format MC answers
@@ -260,8 +294,8 @@ class AnswerSheetProcessor:
             except Exception as e:
                 print(f"[ERROR] Multiple choice extraction failed: {e}")
                 result['multiple_choice_answers'] = {'error': str(e)}
-        
-        elif extract_mc and not self.bubble_template.questions:
+
+        elif extract_mc and (not self.bubble_template or not self.bubble_template.questions):
             print("\n[INFO] Multiple choice extraction skipped - no questions in template")
         
         # ========================================
@@ -274,7 +308,7 @@ class AnswerSheetProcessor:
             
             try:
                 quick_results = self.quick_extractor.extract_all_quick_answers(
-                    image, debug_mode=debug
+                    image_resized, debug_mode=debug
                 )
                 
                 result['quick_answers'] = quick_results
@@ -292,10 +326,43 @@ class AnswerSheetProcessor:
             except Exception as e:
                 print(f"[ERROR] Quick answer extraction failed: {e}")
                 result['quick_answers'] = {'error': str(e)}
-        
+
         elif extract_quick and not self.quick_extractor:
             print("\n[INFO] Quick answer extraction skipped - no CNN model loaded")
         
+        # ========================================
+        # NEW: EXTRACT ANSWER KEY
+        # ========================================
+        if extract_key and self.bubble_template and self.bubble_template.template_data:
+            print(f"\n{'='*70}")
+            print("STEP 4: EXTRACTING ANSWER KEY")
+            print(f"{'='*70}")
+            
+            try:
+                # For key extraction, we need to work with the resized image
+                # Save it temporarily or pass it directly
+                key_result = self.key_extractor.extract_key_from_sheet(
+                    image_path=image_path,
+                    template_path=self.template_path,
+                    threshold_percent=threshold_percent,
+                    debug=debug
+                )
+                
+                result['answer_key'] = key_result
+                result['extraction_summary']['key_extracted'] = True
+                
+                if key_result:
+                    print(f"[SUCCESS] Answer Key: {key_result.get('answer_key', 'Not marked')}")
+                else:
+                    print("[INFO] No KEY region in sheet")
+                    
+            except Exception as e:
+                print(f"[ERROR] Key extraction failed: {e}")
+                result['answer_key'] = {'error': str(e)}
+
+        elif extract_key and (not self.bubble_template or not self.bubble_template.template_data):
+            print("\n[INFO] Answer key extraction skipped - no KEY region in template")
+
         # ========================================
         # 4. VISUALIZATION (if debug enabled)
         # ========================================
@@ -305,9 +372,9 @@ class AnswerSheetProcessor:
             print(f"{'='*70}")
             
             self._visualize_complete_extraction(
-                image, result, 
-                scaled_questions if extract_mc else None,
-                scaled_id_template if extract_id else None
+                image_resized, result,      # Use resized image for visualization
+                scaled_questions,           # Already scaled to 1700x2200
+                scaled_id_template          # Already scaled to 1700x2200
             )
         
         # ========================================
@@ -328,6 +395,10 @@ class AnswerSheetProcessor:
             qa_count = result['quick_answers'].get('total_questions', 0)
             print(f"Quick Answers: {qa_count} questions")
         
+        if result['answer_key']:
+            ak_result = result['answer_key']
+            print(f"Answer Key: {ak_result.get('answer_key', 'N/A')}")
+        
         return result
     
     def _visualize_complete_extraction(self, image, result, scaled_questions, scaled_id_template):
@@ -335,12 +406,35 @@ class AnswerSheetProcessor:
         Create visualization showing all extracted data.
         
         Args:
-            image: Original answer sheet image
+            image: Original answer sheet image (1700x2200)
             result: Extraction result dictionary
             scaled_questions: Scaled MC questions (or None)
             scaled_id_template: Scaled ID template (or None)
         """
         output = image.copy()
+        
+        # Get processing image dimensions
+        proc_height, proc_width = output.shape[:2]  # Should be 1700x2200
+        
+        # Get template dimensions (from bubble_template if available)
+        template_width = None
+        template_height = None
+        
+        if self.bubble_template:
+            template_width = self.bubble_template.template_width
+            template_height = self.bubble_template.template_height
+        
+        # Calculate scale factors for bubbles/regions that came from template
+        if template_width and template_height:
+            scale_x = proc_width / template_width
+            scale_y = proc_height / template_height
+        else:
+            scale_x = 1.0
+            scale_y = 1.0
+        
+        print(f"[DEBUG] Template dims: {template_width}x{template_height}, "
+              f"Processing dims: {proc_width}x{proc_height}, "
+              f"Scale: {scale_x:.3f}x{scale_y:.3f}")
         
         # Draw MC answer bubbles
         if scaled_questions:
@@ -380,45 +474,81 @@ class AnswerSheetProcessor:
                 cv2.putText(output, f"ID: {id_result['student_id']}", 
                            (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 0, 0), 3)
         
-        # Draw quick answer regions
+        # Draw quick answer regions (SCALED)
         if result['quick_answers'] and self.quick_extractor:
-            for qa in result['quick_answers']['quick_answers']:
-                q_num = qa['question_number']
-                region = next((r for r in self.quick_extractor.quick_answer_regions 
-                             if r['question_number'] == q_num), None)
-                
-                if region:
-                    # Compute scaling same as MC/ID
-                    scale_x = output.shape[1] / self.bubble_template.template_width
-                    scale_y = output.shape[0] / self.bubble_template.template_height
+            try:
+                for qa in result['quick_answers']['quick_answers']:
+                    q_num = qa['question_number']
+                    region = next((r for r in self.quick_extractor.quick_answer_regions 
+                                 if r['question_number'] == q_num), None)
+                    
+                    if region:
+                        # Scale quick answer regions from template to processing dimensions
+                        x = int(region['x'] * scale_x)
+                        y = int(region['y'] * scale_y)
+                        w = int(region['width'] * scale_x)
+                        h = int(region['height'] * scale_y)
 
-                    # Scale quick-answer region
-                    x = int(region['x'] * scale_x)
-                    y = int(region['y'] * scale_y)
-                    w = int(region['width'] * scale_x)
-                    h = int(region['height'] * scale_y)
+                        cv2.rectangle(output, (x, y), (x + w, y + h), (255, 165, 0), 2)
 
-                    cv2.rectangle(output, (x, y), (x + w, y + h), (255, 165, 0), 2)
-
-                    if qa['answer']:
-                        label = f"Q{q_num}: {qa['answer']}"
-                        cv2.putText(output, label, (x, y + h + 20),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,165,0), 2)
-                            
-        # Resize if too large
-        height, width = output.shape[:2]
-        max_height = 900
-        if height > max_height:
-            scale = max_height / height
-            new_width = int(width * scale)
-            new_height = int(height * scale)
-            output = cv2.resize(output, (new_width, new_height))
+                        if qa['answer']:
+                            label = f"Q{q_num}: {qa['answer']}"
+                            cv2.putText(output, label, (x, y + h + 20),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 165, 0), 2)
+            except Exception as e:
+                print(f"[WARNING] Could not visualize quick answers: {e}")
         
-        cv2.imshow('Complete Extraction Visualization', output)
-        print("\n[VISUALIZATION]")
+        # Draw answer key region (SCALED)
+        if result['answer_key']:
+            ak_result = result['answer_key']
+            try:
+                # If we have key_bubbles, draw them (they're from template, need scaling)
+                if ak_result.get('key_bubbles'):
+                    for bubble_data in ak_result['key_bubbles']:
+                        x_orig = bubble_data.get('x')
+                        y_orig = bubble_data.get('y')
+                        radius_orig = bubble_data.get('radius')
+                        filled = bubble_data.get('filled', False)
+                        
+                        if x_orig and y_orig and radius_orig:
+                            # Scale from template dimensions to processing dimensions
+                            x = int(x_orig * scale_x)
+                            y = int(y_orig * scale_y)
+                            radius = int(radius_orig * ((scale_x + scale_y) / 2))
+                            
+                            color = (0, 255, 0) if filled else (0, 0, 255)
+                            thickness = 3 if filled else 2
+                            cv2.circle(output, (x, y), radius, color, thickness)
+            except Exception as e:
+                print(f"[WARNING] Could not visualize answer key: {e}")
+        
+        # ========================================
+        # RESIZE FOR DISPLAY
+        # ========================================
+        # Scale down for comfortable display (max 900px height)
+        height, width = output.shape[:2]
+        display_max_height = 900
+        
+        if height > display_max_height:
+            display_scale = display_max_height / height
+            display_width = int(width * display_scale)
+            display_height = int(height * display_scale)
+            
+            output_display = cv2.resize(output, (display_width, display_height), 
+                                       interpolation=cv2.INTER_LINEAR)
+            
+            print(f"\n[DISPLAY] Scaled visualization: {display_width}x{display_height} "
+                  f"(from 1700x2200, scale: {display_scale:.2f}x)")
+        else:
+            output_display = output
+            print(f"\n[DISPLAY] Visualization dimensions: {width}x{height}")
+        
+        cv2.imshow('Complete Extraction Visualization', output_display)
+        print("\n[VISUALIZATION LEGEND]")
         print("  GREEN/RED = Multiple choice bubbles (filled/empty)")
         print("  MAGENTA = Selected ID digit")
-        print("  ORANGE = Quick answer regions")
+        print("  ORANGE = Quick answer boxes")
+        print("  GREEN/RED = Answer key bubbles (filled/empty)")
         print("\nPress any key to close...")
         cv2.waitKey(0)
         cv2.destroyAllWindows()
@@ -548,6 +678,12 @@ class AnswerSheetProcessor:
             print(f"\nQuick Answers:")
             print(f"  Processed: {qa_processed}/{len(results)}")
             
+            # Answer key summary
+            key_processed = sum(1 for r in results 
+                             if r['answer_key'] is not None)
+            print(f"\nAnswer Key:")
+            print(f"  Processed: {key_processed}/{len(results)}")
+            
             # List all student IDs
             print(f"\n{'='*70}")
             print("EXTRACTED STUDENT IDS")
@@ -568,9 +704,9 @@ def main():
     print("="*70)
     
     # Configuration
-    template_path = 'template/test_sheet_20_complete_template.json'
+    template_path = 'template/test_sheet_with_key_complete_template.json'
     cnn_model_path = 'core/models/cnn_model.h5'
-    test_image = 'answer_sheets_4/answer_sheet_1.png'
+    test_image = 'filled_sheet.png'
     
     # Validate files exist
     if not os.path.exists(template_path):

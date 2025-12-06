@@ -88,16 +88,19 @@ class BubbleTemplate:
         """Load template from JSON file"""
         self.json_path = json_path
         self.template_data = self.load_template(json_path)
-        self.questions = self.extract_questions()
-        self.id_template = self.extract_id_template()
         self.template_width = None
         self.template_height = None
         
-        if self.questions:
-            first_page_data = self.get_page_data(1)
-            if first_page_data:
-                self.template_width = first_page_data['image_dimensions']['width']
-                self.template_height = first_page_data['image_dimensions']['height']
+        # Extract dimensions from page_1 FIRST
+        page1 = self.get_page_data(1)
+        if page1 and 'image_dimensions' in page1:
+            self.template_width = page1['image_dimensions'].get('width')
+            self.template_height = page1['image_dimensions'].get('height')
+            print(f"[INFO] Template dimensions: {self.template_width}x{self.template_height}")
+        
+        # Then extract questions and ID
+        self.questions = self.extract_questions()
+        self.id_template = self.extract_id_template()
     
     def load_template(self, json_path):
         """Load template JSON and validate structure"""
@@ -121,7 +124,7 @@ class BubbleTemplate:
         return self.template_data.get(page_key)
     
     def extract_questions(self):
-        """Extract questions from bubble_answers structure"""
+        """Extract questions from MCQ structure"""
         questions = []
 
         for page_key in sorted(self.template_data.keys()):
@@ -130,79 +133,139 @@ class BubbleTemplate:
 
             page = self.template_data[page_key]
 
-            # NEW — look inside bubble_answers
-            bubble_answers = page.get("bubble_answers")
-            if not bubble_answers:
+            # Check for MCQ structure (new complete template format)
+            mcq_data = page.get("mcq")
+            if mcq_data and 'questions' in mcq_data:
+                q_list = mcq_data.get("questions", [])
+                for q in q_list:
+                    bubbles = [
+                        Bubble(label=b['label'], x=b['x'], y=b['y'], radius=b['radius'])
+                        for b in q["bubbles"]
+                    ]
+
+                    question = Question(
+                        question_number=q["question_number"],
+                        bubbles=bubbles,
+                        bounding_box=q.get("bounding_box")
+                    )
+                    questions.append(question)
+                
+                print(f"[INFO] Extracted {len(q_list)} questions from {page_key} (mcq structure)")
+
                 continue
 
-            q_list = bubble_answers.get("questions", [])
-            for q in q_list:
-                bubbles = [
-                    Bubble(label=b['label'], x=b['x'], y=b['y'], radius=b['radius'])
-                    for b in q["bubbles"]
-                ]
+            # Fallback: Check for bubble_answers structure (older format)
+            bubble_answers = page.get("bubble_answers")
+            if bubble_answers:
+                q_list = bubble_answers.get("questions", [])
+                for q in q_list:
+                    bubbles = [
+                        Bubble(label=b['label'], x=b['x'], y=b['y'], radius=b['radius'])
+                        for b in q["bubbles"]
+                    ]
 
-                question = Question(
-                    question_number=q["question_number"],
-                    bubbles=bubbles,
-                    bounding_box=q.get("bounding_box")
-                )
-                questions.append(question)
+                    question = Question(
+                        question_number=q["question_number"],
+                        bubbles=bubbles,
+                        bounding_box=q.get("bounding_box")
+                    )
+                    questions.append(question)
+                
+                print(f"[INFO] Extracted {len(q_list)} questions from {page_key} (bubble_answers structure)")
 
+        if not questions:
+            print("[WARNING] No questions found in template")
+        
         return questions
 
     
     def extract_id_template(self):
-        """Extract student ID bubble template from new JSON structure"""
+        """Extract student ID bubble template"""
         page1 = self.template_data.get("page_1")
         if not page1:
             print("[INFO] No page_1 found in template")
             return None
 
+        # Check new structure first (student_id at top level)
+        id_data = page1.get("student_id")
+        if id_data:
+            columns = id_data.get("digit_columns", [])
+            valid_columns = []
+
+            for column in columns:
+                bubbles = column.get("bubbles", [])
+
+                # Must have 10 digits per column
+                if len(bubbles) != 10:
+                    continue
+
+                # Must contain digits 0–9 exactly
+                digits = sorted([b.get("digit") for b in bubbles])
+                if digits != list(range(10)):
+                    continue
+
+                valid_columns.append(column)
+
+            if not valid_columns:
+                print("[WARNING] No valid student ID columns found")
+                return None
+
+            width = page1["image_dimensions"]["width"]
+            height = page1["image_dimensions"]["height"]
+
+            print(f"[INFO] ID Template OK: {len(valid_columns)} columns")
+
+            return {
+                "template_width": width,
+                "template_height": height,
+                "total_digits": len(valid_columns),
+                "digit_columns": valid_columns
+            }
+        
+        # Fallback: Check bubble_answers structure
         bubble_answers = page1.get("bubble_answers")
-        if not bubble_answers:
-            print("[INFO] No bubble_answers found")
-            return None
+        if bubble_answers:
+            id_data = bubble_answers.get("student_id")
+            if not id_data:
+                print("[INFO] No student_id in bubble_answers")
+                return None
 
-        id_data = bubble_answers.get("student_id")
-        if not id_data:
-            print("[INFO] No student_id structure found")
-            return None
+            columns = id_data.get("digit_columns", [])
+            valid_columns = []
 
-        columns = id_data.get("digit_columns", [])
-        valid_columns = []
+            for column in columns:
+                bubbles = column.get("bubbles", [])
 
-        for column in columns:
-            bubbles = column.get("bubbles", [])
 
-            # Must have 10 digits per column
-            if len(bubbles) != 10:
-                print(f"[FILTER] Skip column pos {column.get('digit_position')} — requires 10 bubbles")
-                continue
+                # Must have 10 digits per column
+                if len(bubbles) != 10:
+                    continue
 
-            # Must contain digits 0–9 exactly
-            digits = sorted([b.get("digit") for b in bubbles])
-            if digits != list(range(10)):
-                print(f"[FILTER] Skip column pos {column.get('digit_position')} — digits not 0–9")
-                continue
+                # Must contain digits 0–9 exactly
+                digits = sorted([b.get("digit") for b in bubbles])
+                if digits != list(range(10)):
+                    continue
 
-            valid_columns.append(column)
+                valid_columns.append(column)
 
-        if not valid_columns:
-            print("[WARNING] No valid student ID columns found")
-            return None
+            if not valid_columns:
+                print("[WARNING] No valid student ID columns found")
+                return None
 
-        width = page1["image_dimensions"]["width"]
-        height = page1["image_dimensions"]["height"]
+            width = page1["image_dimensions"]["width"]
+            height = page1["image_dimensions"]["height"]
 
-        print(f"[INFO] ID Template OK: {len(valid_columns)} columns")
+            print(f"[INFO] ID Template OK: {len(valid_columns)} columns (from bubble_answers)")
 
-        return {
-            "template_width": width,
-            "template_height": height,
-            "total_digits": len(valid_columns),
-            "digit_columns": valid_columns
-        }
+            return {
+                "template_width": width,
+                "template_height": height,
+                "total_digits": len(valid_columns),
+                "digit_columns": valid_columns
+            }
+        
+        print("[INFO] No student ID structure found")
+        return None
 
 
 class AnswerSheetExtractor:
@@ -466,6 +529,120 @@ class AnswerSheetExtractor:
         cv2.waitKey(0)
         cv2.destroyAllWindows()
     
+    def _visualize_complete_extraction(self, image, result, scaled_questions, scaled_id_template):
+        """
+        Create visualization showing all extracted data.
+        
+        Args:
+            image: Original answer sheet image
+            result: Extraction result dictionary
+            scaled_questions: Scaled MC questions (or None)
+            scaled_id_template: Scaled ID template (or None)
+        """
+        output = image.copy()
+        
+        # Get image dimensions for scaling
+        img_height, img_width = output.shape[:2]
+        
+        # Draw MC answer bubbles
+        if scaled_questions:
+            for question in scaled_questions:
+                for bubble in question.bubbles:
+                    x, y, radius = bubble.x, bubble.y, bubble.radius
+                    color = (0, 255, 0) if bubble.filled else (0, 0, 255)
+                    thickness = 3 if bubble.filled else 2
+                    cv2.circle(output, (x, y), radius, color, thickness)
+        
+        # Draw ID bubbles
+        if scaled_id_template and result['student_id']:
+            id_result = result['student_id']
+            status_map = {d['position']: d for d in id_result.get('digit_details', [])}
+            
+            for column in scaled_id_template['digit_columns']:
+                digit_pos = column['digit_position']
+                status = status_map.get(digit_pos, {})
+                selected_digit = status.get('digit')
+                
+                for bubble in column['bubbles']:
+                    x, y = bubble['x'], bubble['y']
+                    radius = bubble['radius']
+                    digit = bubble['digit']
+                    
+                    if digit == selected_digit:
+                        color = (255, 0, 255)  # Magenta for selected
+                        thickness = 3
+                    else:
+                        color = (128, 0, 128)  # Purple for unselected
+                        thickness = 1
+                    
+                    cv2.circle(output, (x, y), radius, color, thickness)
+            
+            # Add ID text
+            if id_result.get('student_id'):
+                cv2.putText(output, f"ID: {id_result['student_id']}", 
+                           (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 0, 0), 3)
+        
+        # Draw quick answer regions
+        if result['quick_answers'] and self.quick_extractor:
+            try:
+                for qa in result['quick_answers']['quick_answers']:
+                    q_num = qa['question_number']
+                    region = next((r for r in self.quick_extractor.quick_answer_regions 
+                                 if r['question_number'] == q_num), None)
+                    
+                    if region:
+                        x = region['x']
+                        y = region['y']
+                        w = region['width']
+                        h = region['height']
+
+                        cv2.rectangle(output, (x, y), (x + w, y + h), (255, 165, 0), 2)
+
+                        if qa['answer']:
+                            label = f"Q{q_num}: {qa['answer']}"
+                            cv2.putText(output, label, (x, y + h + 20),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 165, 0), 2)
+            except Exception as e:
+                print(f"[WARNING] Could not visualize quick answers: {e}")
+        
+        # Draw answer key region if available
+        if result['answer_key']:
+            ak_result = result['answer_key']
+            try:
+                # If we have key_bubbles, draw them
+                if ak_result.get('key_bubbles'):
+                    for bubble_data in ak_result['key_bubbles']:
+                        x = bubble_data.get('x')
+                        y = bubble_data.get('y')
+                        radius = bubble_data.get('radius')
+                        filled = bubble_data.get('filled', False)
+                        
+                        if x and y and radius:
+                            color = (0, 255, 0) if filled else (0, 0, 255)
+                            thickness = 3 if filled else 2
+                            cv2.circle(output, (x, y), radius, color, thickness)
+            except Exception as e:
+                print(f"[WARNING] Could not visualize answer key: {e}")
+        
+        # Resize if too large
+        height, width = output.shape[:2]
+        max_height = 900
+        if height > max_height:
+            scale = max_height / height
+            new_width = int(width * scale)
+            new_height = int(height * scale)
+            output = cv2.resize(output, (new_width, new_height))
+        
+        cv2.imshow('Complete Extraction Visualization', output)
+        print("\n[VISUALIZATION]")
+        print("  GREEN/RED = Multiple choice bubbles (filled/empty)")
+        print("  MAGENTA = Selected ID digit")
+        print("  ORANGE = Quick answer regions")
+        print("  GREEN/RED = Answer key region (filled/empty)")
+        print("\nPress any key to close...")
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+    
     def extract_complete(self, image_path, threshold_percent=50, debug=True):
         """
         Extract both answers and student ID from filled answer sheet
@@ -540,6 +717,7 @@ class AnswerSheetExtractor:
         # Visualization
         if debug:
             self.visualize_extraction(image, questions, id_result, scaled_id_template)
+            #self._visualize_complete_extraction(image, result, scaled_questions, scaled_id_template)
         
         return result
 

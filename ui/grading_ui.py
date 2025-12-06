@@ -5,7 +5,7 @@ Pure UI components for grading answer sheets (updated to use new grading flow/re
 import os
 import sys
 import tkinter as tk
-from tkinter import ttk, messagebox, StringVar, IntVar, NORMAL, DISABLED
+from tkinter import ttk, messagebox, StringVar, IntVar, NORMAL, DISABLED, filedialog
 from PIL import Image, ImageTk
 import cv2
 import numpy as np
@@ -15,7 +15,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from utils.file_utils import select_file, select_directory, get_project_root, create_temp_file, cleanup_temp_files
+from utils.file_utils import get_project_root, create_temp_file, cleanup_temp_files
 from flows.grading_flow import GradingFlow
 
 
@@ -37,6 +37,8 @@ class GradingUI:
         self.key_var = StringVar(value="Not loaded")
         self.threshold_var = IntVar(value=50)
         self.mode_var = StringVar(value="single")
+        self.partial_mcq_var = tk.BooleanVar(value=True)
+        self.written_tolerance_var = tk.DoubleVar(value=0.0)
         
         # Batch state
         self.current_batch_index = 0
@@ -106,6 +108,9 @@ class GradingUI:
         # Configuration card
         self.create_config_card(content)
         
+        # Grading options card
+        self.create_options_card(content)
+        
         # Mode card
         self.create_mode_card(content)
         
@@ -159,6 +164,34 @@ class GradingUI:
         
         self.threshold_var.trace("w", self.update_threshold_label)
     
+    def create_options_card(self, parent):
+        """Create grading options card"""
+        card = tk.Frame(parent, bg=self.CARD_COLOR)
+        card.pack(fill=tk.X, pady=(0, 15))
+        
+        inner = tk.Frame(card, bg=self.CARD_COLOR)
+        inner.pack(fill=tk.BOTH, padx=20, pady=15)
+        
+        tk.Label(inner, text="🎯 Grading Options",
+                font=("Segoe UI", 11, "bold"), bg=self.CARD_COLOR).pack(anchor="w", pady=(0, 10))
+        
+        # Partial MCQ credit
+        ttk.Checkbutton(inner, text="Partial credit for multi-answer MCQs", 
+                       variable=self.partial_mcq_var).pack(anchor="w", pady=3)
+        
+        # Written tolerance
+        tolerance_frame = tk.Frame(inner, bg=self.CARD_COLOR)
+        tolerance_frame.pack(fill=tk.X, pady=5)
+        
+        tk.Label(tolerance_frame, text="Written answer tolerance:",
+                font=("Segoe UI", 9, "bold"), bg=self.CARD_COLOR).pack(side=tk.LEFT)
+        
+        tolerance_entry = ttk.Entry(tolerance_frame, textvariable=self.written_tolerance_var, width=10)
+        tolerance_entry.pack(side=tk.LEFT, padx=(5, 0))
+        
+        tk.Label(tolerance_frame, text="(for numeric answers)", font=("Segoe UI", 8),
+                bg=self.CARD_COLOR, fg="#666").pack(side=tk.LEFT, padx=(5, 0))
+    
     def create_mode_card(self, parent):
         """Create mode selection card"""
         card = tk.Frame(parent, bg=self.CARD_COLOR)
@@ -189,24 +222,12 @@ class GradingUI:
         tk.Label(inner, text="📈 Results",
                 font=("Segoe UI", 11, "bold"), bg=self.CARD_COLOR).pack(anchor="w", pady=(0, 10))
         
-        # Results text with scrollbar
-        text_frame = tk.Frame(inner, bg=self.CARD_COLOR)
-        text_frame.pack(fill=tk.BOTH, expand=True)
+        # Create a container for text and navigation
+        results_container = tk.Frame(inner, bg=self.CARD_COLOR)
+        results_container.pack(fill=tk.BOTH, expand=True)
         
-        scrollbar = tk.Scrollbar(text_frame)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        self.results_text = tk.Text(text_frame, height=20, wrap=tk.WORD,
-                                   font=("Courier New", 10), bg="#fafafa", relief=tk.FLAT,
-                                   yscrollcommand=scrollbar.set)
-        self.results_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.config(command=self.results_text.yview)
-        
-        self.results_text.insert("1.0", "Results will appear here after grading...")
-        self.results_text.config(state=tk.DISABLED)
-        
-        # Navigation for batch mode
-        self.nav_frame = tk.Frame(inner, bg=self.CARD_COLOR)
+        # Navigation frame (initially hidden, shown during batch mode)
+        self.nav_frame = tk.Frame(results_container, bg=self.CARD_COLOR)
         
         self.nav_label = tk.Label(self.nav_frame, text="Sheet 1 of 1", bg=self.CARD_COLOR,
                                  font=("Segoe UI", 9, "bold"))
@@ -217,6 +238,30 @@ class GradingUI:
         
         self.next_btn = ttk.Button(self.nav_frame, text="Next →", command=self.on_next_sheet, width=8)
         self.next_btn.pack(side=tk.LEFT, padx=2)
+        
+        # Results text area with reduced height
+        text_frame = tk.Frame(results_container, bg=self.CARD_COLOR)
+        text_frame.pack(fill=tk.BOTH, expand=True, pady=(5, 0))  # Reduced padding
+        
+        scrollbar = tk.Scrollbar(text_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Reduced height from 20 to 10 lines
+        self.results_text = tk.Text(text_frame, height=10, wrap=tk.WORD,
+                                   font=("Courier New", 10), bg="#fafafa", relief=tk.FLAT,
+                                   yscrollcommand=scrollbar.set)
+        self.results_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.results_text.yview)
+        
+        self.results_text.insert("1.0", "Results will appear here after grading...\n\n")
+        self.results_text.insert(tk.END, "Visualization Legend:\n")
+        self.results_text.insert(tk.END, "• Green circles: Correct MCQ answers\n")
+        self.results_text.insert(tk.END, "• Red circles: Wrong MCQ answers\n")
+        self.results_text.insert(tk.END, "• Blue circle: Selected answer key\n")
+        self.results_text.insert(tk.END, "• Magenta circles: Student ID digits\n")
+        self.results_text.insert(tk.END, "• Green boxes: Correct written answers\n")
+        self.results_text.insert(tk.END, "• Red boxes: Wrong written answers\n")
+        self.results_text.config(state=tk.DISABLED)
     
     def create_right_panel(self, parent):
         """Create right preview panel"""
@@ -235,10 +280,14 @@ class GradingUI:
         
         self.current_image = None
         
-        # Placeholder
+        # Placeholder with legend info
         self.canvas.create_text(400, 300,
-                               text="Answer sheet preview will\nappear here after grading",
-                               font=("Segoe UI", 12), fill="gray", justify=tk.CENTER)
+                               text="Answer sheet preview will\nappear here after grading\n\n"
+                                    "Colored annotations:\n"
+                                    "• Green/Red: MCQ answers\n"
+                                    "• Blue: Answer key\n"
+                                    "• Magenta: Student ID",
+                               font=("Segoe UI", 11), fill="gray", justify=tk.CENTER)
     
     def update_threshold_label(self, *args):
         """Update threshold label"""
@@ -248,10 +297,14 @@ class GradingUI:
         """Handle load template button"""
         template_dir = os.path.join(get_project_root(), 'template')
         
-        path = select_file(
+        # Create directory if it doesn't exist
+        if not os.path.exists(template_dir):
+            os.makedirs(template_dir, exist_ok=True)
+        
+        path = filedialog.askopenfilename(
             title="Select Template JSON",
             filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
-            initial_dir=template_dir
+            initialdir=template_dir
         )
         
         if not path:
@@ -261,7 +314,11 @@ class GradingUI:
         
         if success:
             self.template_var.set(template_info['name'])
-            messagebox.showinfo("Success", f"Template loaded:\n{template_info['total_questions']} questions detected")
+            messagebox.showinfo("Success", 
+                f"Template loaded successfully!\n"
+                f"• Name: {template_info['name']}\n"
+                f"• Questions detected: {template_info['total_questions']}\n"
+                f"• Has student ID: {'Yes' if template_info['has_student_id'] else 'No'}")
         else:
             messagebox.showerror("Error", f"Failed to load template:\n{error}")
     
@@ -269,10 +326,14 @@ class GradingUI:
         """Handle load answer key button"""
         key_dir = os.path.join(get_project_root(), 'answer_keys')
         
-        path = select_file(
+        # Create directory if it doesn't exist
+        if not os.path.exists(key_dir):
+            os.makedirs(key_dir, exist_ok=True)
+        
+        path = filedialog.askopenfilename(
             title="Select Answer Key JSON",
             filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
-            initial_dir=key_dir
+            initialdir=key_dir
         )
         
         if not path:
@@ -282,7 +343,10 @@ class GradingUI:
         
         if success:
             self.key_var.set(key_info['name'])
-            messagebox.showinfo("Success", f"Answer key loaded:\n{key_info['exam_name']}\n{key_info['total_questions']} questions")
+            messagebox.showinfo("Success", 
+                f"Answer key loaded successfully!\n"
+                f"• Exam: {key_info['exam_name']}\n"
+                f"• Total questions: {key_info['total_questions']}")
         else:
             messagebox.showerror("Error", f"Failed to load answer key:\n{error}")
     
@@ -291,11 +355,11 @@ class GradingUI:
         config = self.flow.get_configuration()
         
         if not config['template_loaded']:
-            messagebox.showerror("Error", "Please load template first")
+            messagebox.showerror("Error", "Please load a template first")
             return
         
         if not config['key_loaded']:
-            messagebox.showerror("Error", "Please load answer key first")
+            messagebox.showerror("Error", "Please load an answer key first")
             return
         
         # Set threshold
@@ -308,7 +372,8 @@ class GradingUI:
     
     def grade_single(self):
         """Grade single sheet"""
-        image_path = select_file(
+        # Let user select any image file
+        image_path = filedialog.askopenfilename(
             title="Select Filled Answer Sheet",
             filetypes=[("Image files", "*.png *.jpg *.jpeg *.bmp *.tiff"), ("All files", "*.*")]
         )
@@ -316,70 +381,125 @@ class GradingUI:
         if not image_path:
             return
         
+        # Verify the file exists
+        if not os.path.exists(image_path):
+            messagebox.showerror("Error", f"File not found: {image_path}")
+            return
+        
         self.results_text.config(state=tk.NORMAL)
         self.results_text.delete("1.0", tk.END)
-        self.results_text.insert("1.0", "Processing answer sheet...\n")
+        self.results_text.insert("1.0", f"Processing: {os.path.basename(image_path)}...\n")
         self.results_text.config(state=tk.DISABLED)
         self.root.update_idletasks()
         
-        # call flow with partial_mcq = True as default optional (you can change)
-        success, error, result = self.flow.grade_single_sheet(image_path, partial_mcq=True)
+        # Get grading options from UI
+        partial_mcq = self.partial_mcq_var.get()
+        written_tolerance = self.written_tolerance_var.get()
         
-        if success:
-            self.display_single_result(result)
-            self.nav_frame.pack_forget()
+        try:
+            success, error, result = self.flow.grade_single_sheet(
+                image_path, 
+                partial_mcq=partial_mcq,
+                written_tolerance=written_tolerance
+            )
             
-            # Display the processed image with colored bubble/box outlines
-            processed_image = self.flow.get_processed_image()
-            if processed_image is not None:
-                self._display_image_on_canvas(processed_image)
+            if success:
+                self.display_single_result(result)
+                # Hide navigation for single mode
+                self.nav_frame.pack_forget()
+                
+                # Display the processed image with colored bubble/box outlines
+                processed_image = self.flow.get_processed_image()
+                if processed_image is not None:
+                    self._display_image_on_canvas(processed_image)
+                    # Add zoom controls hint
+                    self.canvas.bind("<MouseWheel>", self.on_mousewheel)
+                    self.canvas.bind("<Button-1>", self.on_canvas_click)
+                    self.canvas.config(cursor="hand2")
+                else:
+                    print("[UI] Warning: No processed image available")
+                    self.results_text.config(state=tk.NORMAL)
+                    self.results_text.insert(tk.END, "\n[WARNING] No visualization available for this sheet.\n")
+                    self.results_text.config(state=tk.DISABLED)
             else:
-                print("[UI] Warning: No processed image available")
-        else:
+                self.results_text.config(state=tk.NORMAL)
+                self.results_text.delete("1.0", tk.END)
+                self.results_text.insert("1.0", f"ERROR: {error}")
+                self.results_text.config(state=tk.DISABLED)
+                messagebox.showerror("Grading Error", f"Grading failed:\n{error}")
+                
+        except Exception as e:
             self.results_text.config(state=tk.NORMAL)
             self.results_text.delete("1.0", tk.END)
-            self.results_text.insert("1.0", f"ERROR: {error}")
+            self.results_text.insert("1.0", f"UNEXPECTED ERROR: {str(e)}")
             self.results_text.config(state=tk.DISABLED)
-            messagebox.showerror("Error", f"Grading failed:\n{error}")
+            messagebox.showerror("Unexpected Error", f"An unexpected error occurred:\n{str(e)}")
+            import traceback
+            traceback.print_exc()
     
     def grade_batch(self):
         """Grade batch of sheets"""
-        folder_path = select_directory(
+        folder_path = filedialog.askdirectory(
             title="Select Folder with Answer Sheets"
         )
         
         if not folder_path:
             return
         
+        # Verify the folder exists
+        if not os.path.exists(folder_path):
+            messagebox.showerror("Error", f"Folder not found: {folder_path}")
+            return
+        
         self.results_text.config(state=tk.NORMAL)
         self.results_text.delete("1.0", tk.END)
-        self.results_text.insert("1.0", "Processing batch...\n")
+        self.results_text.insert("1.0", f"Processing batch from: {folder_path}...\n")
         self.results_text.config(state=tk.DISABLED)
         self.root.update_idletasks()
         
-        success, error, results = self.flow.grade_batch(folder_path, partial_mcq=True)
+        # Get grading options from UI
+        partial_mcq = self.partial_mcq_var.get()
+        written_tolerance = self.written_tolerance_var.get()
         
-        if success:
-            batch_results, summary = results
-            self.current_batch_index = 0
-            self.display_batch_result(0)
-            self.nav_frame.pack(pady=(10, 0))
+        try:
+            success, error, results = self.flow.grade_batch(
+                folder_path, 
+                partial_mcq=partial_mcq,
+                written_tolerance=written_tolerance
+            )
             
-            error_msg = ""
-            if summary.get('errors'):
-                error_msg = f"\n\nErrors: {len(summary['errors'])} sheets failed"
-            
-            messagebox.showinfo("Batch Complete",
-                f"Batch grading complete!\n\n"
-                f"• {summary['total_sheets']} sheets graded\n"
-                f"• Average score: {summary['avg_percentage']:.1f}%\n"
-                f"• Use navigation to view results{error_msg}")
-        else:
+            if success:
+                batch_results, summary = results
+                self.current_batch_index = 0
+                
+                # Show navigation at the top of results
+                self.nav_frame.pack(fill=tk.X, pady=(0, 5))
+                self.display_batch_result(0)
+                
+                error_msg = ""
+                if summary.get('errors'):
+                    error_msg = f"\n\nErrors: {len(summary['errors'])} sheets failed"
+                
+                messagebox.showinfo("Batch Complete",
+                    f"Batch grading complete!\n\n"
+                    f"• {summary['total_sheets']} sheets graded\n"
+                    f"• Average score: {summary['avg_percentage']:.1f}%\n"
+                    f"• Use navigation to view results{error_msg}")
+            else:
+                self.results_text.config(state=tk.NORMAL)
+                self.results_text.delete("1.0", tk.END)
+                self.results_text.insert("1.0", f"ERROR: {error}")
+                self.results_text.config(state=tk.DISABLED)
+                messagebox.showerror("Batch Error", f"Batch grading failed:\n{error}")
+                
+        except Exception as e:
             self.results_text.config(state=tk.NORMAL)
             self.results_text.delete("1.0", tk.END)
-            self.results_text.insert("1.0", f"ERROR: {error}")
+            self.results_text.insert("1.0", f"UNEXPECTED ERROR: {str(e)}")
             self.results_text.config(state=tk.DISABLED)
-            messagebox.showerror("Error", f"Batch grading failed:\n{error}")
+            messagebox.showerror("Unexpected Error", f"An unexpected error occurred:\n{str(e)}")
+            import traceback
+            traceback.print_exc()
     
     def display_single_result(self, result):
         """Display single grading result using the exact format requested"""
@@ -411,12 +531,13 @@ class GradingUI:
 
         # Small detailed counts
         self.results_text.insert(tk.END, f"MCQ - correct: {mcq_correct}, incorrect: {summary.get('mcq_incorrect',0)}, partial: {summary.get('mcq_partial',0)}, blank: {summary.get('mcq_blank',0)}\n")
-        self.results_text.insert(tk.END, f"Written - correct: {written_correct}, incorrect: {summary.get('written_incorrect',0)}, blank: {summary.get('written_blank',0)}\n")
+        self.results_text.insert(tk.END, f"Written - correct: {written_correct}, incorrect: {summary.get('written_incorrect',0)}, blank: {summary.get('written_blank',0)}\n\n")
 
         # Configure tags
         self.results_text.tag_config("header", font=("Courier New", 10, "bold"))
         self.results_text.tag_config("student_id", font=("Courier New", 11, "bold"), foreground="darkblue")
         self.results_text.tag_config("score", font=("Courier New", 12, "bold"), foreground="blue")
+        self.results_text.tag_config("legend_header", font=("Courier New", 10, "bold"))
 
         self.results_text.config(state=tk.DISABLED)
     
@@ -463,9 +584,17 @@ class GradingUI:
             self.canvas.delete("all")
             x = canvas_width // 2
             y = canvas_height // 2
-            self.canvas.create_image(x, y, image=self.current_image, anchor=tk.CENTER)
+            self.image_id = self.canvas.create_image(x, y, image=self.current_image, anchor=tk.CENTER)
             
-            print(f"[UI] Image displayed: {new_width}x{new_height}")
+            # Add scale info
+            scale_text = f"Scale: {self.canvas_scale:.2f}x (Click to reset, Scroll to zoom)"
+            self.canvas.create_text(canvas_width // 2, 20, 
+                                   text=scale_text, 
+                                   font=("Segoe UI", 9), 
+                                   fill="white",
+                                   tags="scale_text")
+            
+            print(f"[UI] Image displayed: {new_width}x{new_height} (scale: {self.canvas_scale:.2f})")
             
         except Exception as e:
             print(f"[UI] Error displaying image: {e}")
@@ -475,6 +604,38 @@ class GradingUI:
             self.canvas.create_text(400, 300,
                                    text=f"Error displaying image:\n{str(e)[:50]}",
                                    font=("Segoe UI", 10), fill="red", justify=tk.CENTER)
+    
+    def on_mousewheel(self, event):
+        """Handle mouse wheel for zooming"""
+        # Basic zoom in/out (simple implementation)
+        if event.delta > 0:
+            self.canvas_scale = min(self.canvas_scale * 1.1, 3.0)  # Max 3x zoom
+        else:
+            self.canvas_scale = max(self.canvas_scale * 0.9, 0.5)  # Min 0.5x zoom
+        
+        # Redisplay image at new scale
+        if self.mode_var.get() == "single":
+            processed_image = self.flow.get_processed_image()
+            if processed_image is not None:
+                self._display_image_on_canvas(processed_image)
+        else:
+            processed_image = self.flow.get_processed_image_for_sheet(self.current_batch_index)
+            if processed_image is not None:
+                self._display_image_on_canvas(processed_image)
+    
+    def on_canvas_click(self, event):
+        """Handle canvas click to reset zoom"""
+        self.canvas_scale = 1.0
+        
+        # Redisplay at original scale
+        if self.mode_var.get() == "single":
+            processed_image = self.flow.get_processed_image()
+            if processed_image is not None:
+                self._display_image_on_canvas(processed_image)
+        else:
+            processed_image = self.flow.get_processed_image_for_sheet(self.current_batch_index)
+            if processed_image is not None:
+                self._display_image_on_canvas(processed_image)
     
     def display_batch_result(self, index):
         """Display batch result at index"""
@@ -497,6 +658,10 @@ class GradingUI:
         processed_image = self.flow.get_processed_image_for_sheet(index)
         if processed_image is not None:
             self._display_image_on_canvas(processed_image)
+            # Add zoom controls
+            self.canvas.bind("<MouseWheel>", self.on_mousewheel)
+            self.canvas.bind("<Button-1>", self.on_canvas_click)
+            self.canvas.config(cursor="hand2")
         else:
             print(f"[UI] Warning: No processed image for sheet {index}")
     

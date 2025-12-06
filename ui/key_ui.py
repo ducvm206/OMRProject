@@ -1,6 +1,6 @@
 """
-Answer Key Creation UI
-Pure UI components for answer key creation with MCQ and Written sections
+Answer Key Creation UI - Multiple Keys Support
+Pure UI components for creating multiple answer keys (A-E) for an exam
 """
 import os
 import sys
@@ -13,200 +13,182 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from utils.file_utils import select_file, get_project_root
-from utils.validation import validate_filename
 from flows.key_flow import AnswerKeyFlow
 
 
 class AnswerKeyUI:
-    """UI for answer key creation with MCQ and Written sections"""
+    """UI for creating multiple answer keys (A-E) for an exam"""
     
     def __init__(self, root):
-        """
-        Initialize UI
-        
-        Args:
-            root: Tkinter root window
-        """
+        """Initialize UI"""
         self.root = root
         self.flow = AnswerKeyFlow()
         
         # UI State
+        self.exam_name_var = StringVar(value="")
+        self.num_keys_var = IntVar(value=1)
+        self.mcq_points_var = IntVar(value=0)
+        self.written_points_var = IntVar(value=0)
         self.template_var = StringVar(value="No template loaded")
-        self.questions_var = StringVar(value="--")
-        self.mcq_count_var = IntVar(value=0)
-        self.written_count_var = IntVar(value=0)
-        self.mcq_progress_var = StringVar(value="0")
-        self.written_progress_var = StringVar(value="0")
-        self.status_var = StringVar(value="Ready to create answer key")
+        self.current_key_var = StringVar(value="A")
+        self.status_var = StringVar(value="Ready")
         
-        # Available question counts from template
-        self.mcq_available = 0
-        self.written_available = 0
-        
-        # Entry widgets
+        # Entry widgets for current key
         self.mcq_entries = []
         self.written_entries = []
         
-        # Setup UI
+        # Colors
+        self.BG_COLOR = "#f5f5f5"
+        self.CARD_COLOR = "#ffffff"
+        self.MCQ_COLOR = "#e3f2fd"
+        self.WRITTEN_COLOR = "#fff3e0"
+        self.KEY_SELECTOR_COLOR = "#f3e5f5"
+        self.BUTTON_COLORS = {
+            'A': "#4CAF50",  # Green
+            'B': "#2196F3",  # Blue
+            'C': "#FF9800",  # Orange
+            'D': "#F44336",  # Red
+            'random': "#9C27B0"  # Purple
+        }
+        
         self.setup_window()
         self.create_ui()
     
     def setup_window(self):
         """Setup main window properties"""
-        self.root.title("Answer Key Creator - MCQ & Written Answers")
+        self.root.title("Answer Key Creator - Multiple Keys (A-E)")
         
-        # Make window fullscreen or very large
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
         
-        # Use 90% of screen size
         width = int(screen_width * 0.9)
         height = int(screen_height * 0.9)
         
-        # Center the window
         x = (screen_width - width) // 2
         y = (screen_height - height) // 2
         
         self.root.geometry(f"{width}x{height}+{x}+{y}")
         self.root.resizable(True, True)
-        
-        # Set minimum window size
         self.root.minsize(1400, 800)
         
-        # Configure style
         style = ttk.Style()
         style.theme_use('clam')
-        
-        # Colors
-        self.BG_COLOR = "#f5f5f5"
-        self.CARD_COLOR = "#ffffff"
-        self.MCQ_COLOR = "#e3f2fd"  # Light blue
-        self.WRITTEN_COLOR = "#fff3e0"  # Light orange
         
         style.configure("TFrame", background=self.BG_COLOR)
         style.configure("TLabel", background=self.BG_COLOR, font=("Segoe UI", 10))
         style.configure("Card.TFrame", background=self.CARD_COLOR, relief="flat")
-        style.configure("MCQ.TFrame", background=self.MCQ_COLOR)
-        style.configure("Written.TFrame", background=self.WRITTEN_COLOR)
         style.configure("TButton", font=("Segoe UI", 10), padding=8)
         style.configure("Accent.TButton", font=("Segoe UI", 10, "bold"))
         style.configure("Valid.TEntry", fieldbackground="#d4edda", relief="flat")
         style.configure("TEntry", relief="flat", padding=5)
     
     def create_ui(self):
-        """Create main UI components"""
-        # Main container
+        """Create main UI"""
         main_container = tk.Frame(self.root, bg=self.BG_COLOR)
-        main_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=(5, 5))
+        main_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
         
         # Title
-        title = tk.Label(main_container, text="Answer Key Creator", 
+        title = tk.Label(main_container, text="Answer Key Creator - Multiple Keys", 
                         font=("Segoe UI", 16, "bold"), bg=self.BG_COLOR, fg="#333")
         title.pack(pady=(0, 20))
         
-        # Template card
-        self.create_template_card(main_container)
+        # Step 1: Configuration Card
+        self.create_configuration_card(main_container)
         
-        # Configuration card (shown after template loaded)
-        self.config_frame = tk.Frame(main_container, bg=self.BG_COLOR)
-        self.config_frame.pack(fill=tk.X, pady=(0, 20))
-        
-        # Answer entry area (initially hidden)
-        self.answer_frame = tk.Frame(main_container, bg=self.BG_COLOR)
-        self.answer_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
+        # Step 2: Key Selection & Entry (hidden initially)
+        self.key_entry_frame = tk.Frame(main_container, bg=self.BG_COLOR)
+        self.key_entry_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         
         # Status bar
         self.create_status_bar(main_container)
     
-    def create_template_card(self, parent):
-        """Create template selection card"""
-        template_card = tk.Frame(parent, bg=self.CARD_COLOR, relief="flat")
-        template_card.pack(fill=tk.X, pady=(0, 5))
-        
-        template_inner = tk.Frame(template_card, bg=self.CARD_COLOR)
-        template_inner.pack(fill=tk.BOTH, padx=20, pady=20)
-        
-        tk.Label(template_inner, text="📋 Template Configuration", 
-                font=("Segoe UI", 11, "bold"), bg=self.CARD_COLOR, fg="#333").pack(anchor="w", pady=(0, 15))
-        
-        # Template info grid
-        info_frame = tk.Frame(template_inner, bg=self.CARD_COLOR)
-        info_frame.pack(fill=tk.X)
-        
-        tk.Label(info_frame, text="Template:", 
-                font=("Segoe UI", 9, "bold"), bg=self.CARD_COLOR).grid(row=0, column=0, sticky="w", padx=(0, 10))
-        tk.Label(info_frame, textvariable=self.template_var, 
-                font=("Segoe UI", 9), bg=self.CARD_COLOR).grid(row=0, column=1, sticky="w")
-        
-        tk.Label(info_frame, text="Total Questions:", 
-                font=("Segoe UI", 9, "bold"), bg=self.CARD_COLOR).grid(row=1, column=0, sticky="w", padx=(0, 10), pady=(5, 0))
-        tk.Label(info_frame, textvariable=self.questions_var, 
-                font=("Segoe UI", 9), bg=self.CARD_COLOR).grid(row=1, column=1, sticky="w", pady=(5, 0))
-        
-        ttk.Button(template_inner, text="📂 Load Template", 
-                  command=self.on_load_template).pack(anchor="w", pady=(15, 0))
-    
-    def create_config_card(self):
-        """Create question count configuration card"""
-        # Clear existing
-        for widget in self.config_frame.winfo_children():
-            widget.destroy()
-        
-        config_card = tk.Frame(self.config_frame, bg=self.CARD_COLOR, relief="flat")
-        config_card.pack(fill=tk.X)
+    def create_configuration_card(self, parent):
+        """Create initial configuration card"""
+        config_card = tk.Frame(parent, bg=self.CARD_COLOR, relief="flat")
+        config_card.pack(fill=tk.X, pady=(0, 20))
         
         config_inner = tk.Frame(config_card, bg=self.CARD_COLOR)
         config_inner.pack(fill=tk.BOTH, padx=20, pady=20)
         
-        tk.Label(config_inner, text="⚙️ Question Scoring Configuration", 
-                font=("Segoe UI", 11, "bold"), bg=self.CARD_COLOR, fg="#333").pack(anchor="w", pady=(0, 15))
+        # Step 1: Template
+        step1_frame = tk.Frame(config_inner, bg=self.CARD_COLOR)
+        step1_frame.pack(fill=tk.X, pady=(0, 20))
         
-        tk.Label(config_inner, text="Specify the maximum total points for each section:", 
-                font=("Segoe UI", 9), bg=self.CARD_COLOR, fg="#666").pack(anchor="w", pady=(0, 5))
+        tk.Label(step1_frame, text="Step 1: Load Template", 
+                font=("Segoe UI", 11, "bold"), bg=self.CARD_COLOR, fg="#333").pack(anchor="w", pady=(0, 10))
         
-        tk.Label(config_inner, text="Points per question = Max Points ÷ Number of Questions", 
-                font=("Segoe UI", 9, "italic"), bg=self.CARD_COLOR, fg="#999").pack(anchor="w", pady=(0, 10))
+        template_display = tk.Frame(step1_frame, bg=self.CARD_COLOR)
+        template_display.pack(fill=tk.X)
         
-        # Input grid
-        input_frame = tk.Frame(config_inner, bg=self.CARD_COLOR)
-        input_frame.pack(fill=tk.X, pady=(0, 15))
+        tk.Label(template_display, text="Template:", 
+                font=("Segoe UI", 9, "bold"), bg=self.CARD_COLOR).pack(side=tk.LEFT)
+        tk.Label(template_display, textvariable=self.template_var, 
+                font=("Segoe UI", 9), bg=self.CARD_COLOR).pack(side=tk.LEFT, padx=(10, 0))
         
-        # MCQ section
-        tk.Label(input_frame, text="MCQ Max Points:", 
-                font=("Segoe UI", 10, "bold"), bg=self.CARD_COLOR).grid(row=0, column=0, sticky="w", padx=(0, 10))
-        self.mcq_spinbox = ttk.Spinbox(input_frame, from_=0, to=1000, 
-                                       textvariable=self.mcq_count_var, width=10)
-        self.mcq_spinbox.grid(row=0, column=1, sticky="w")
+        ttk.Button(step1_frame, text="📂 Load Template", 
+                  command=self.on_load_template).pack(anchor="w", pady=(10, 0))
         
-        self.mcq_info_label = tk.Label(input_frame, text=f"({self.mcq_available} MCQ questions available)", 
-                font=("Segoe UI", 8), bg=self.CARD_COLOR, fg="#666")
-        self.mcq_info_label.grid(row=0, column=2, sticky="w", padx=(10, 0))
+        # Step 2: Exam Configuration
+        step2_frame = tk.Frame(config_inner, bg=self.CARD_COLOR)
+        step2_frame.pack(fill=tk.X, pady=(20, 0))
         
-        # Written section
-        tk.Label(input_frame, text="Written Max Points:", 
-                font=("Segoe UI", 10, "bold"), bg=self.CARD_COLOR).grid(row=1, column=0, sticky="w", padx=(0, 10), pady=(10, 0))
-        self.written_spinbox = ttk.Spinbox(input_frame, from_=0, to=1000, 
-                                           textvariable=self.written_count_var, width=10)
-        self.written_spinbox.grid(row=1, column=1, sticky="w", pady=(10, 0))
+        tk.Label(step2_frame, text="Step 2: Configure Exam", 
+                font=("Segoe UI", 11, "bold"), bg=self.CARD_COLOR, fg="#333").pack(anchor="w", pady=(0, 10))
         
-        self.written_info_label = tk.Label(input_frame, text=f"({self.written_available} written questions available)", 
-                font=("Segoe UI", 8), bg=self.CARD_COLOR, fg="#666")
-        self.written_info_label.grid(row=1, column=2, sticky="w", padx=(10, 0), pady=(10, 0))
+        # Exam name
+        name_frame = tk.Frame(step2_frame, bg=self.CARD_COLOR)
+        name_frame.pack(fill=tk.X, pady=5)
         
-        # Bind spinbox changes
-        self.mcq_count_var.trace_add('write', self.on_count_change)
-        self.written_count_var.trace_add('write', self.on_count_change)
+        tk.Label(name_frame, text="Exam Name:", 
+                font=("Segoe UI", 9, "bold"), bg=self.CARD_COLOR, width=15, anchor="w").pack(side=tk.LEFT)
+        ttk.Entry(name_frame, textvariable=self.exam_name_var, width=30).pack(side=tk.LEFT, padx=(0, 10))
         
-        # Continue button
-        self.continue_btn = ttk.Button(config_inner, text="Continue to Answer Entry", 
-                                      command=self.on_configure_sections,
-                                      style="Accent.TButton")
-        self.continue_btn.pack(anchor="w", pady=(10, 0))
+        # Number of keys
+        keys_frame = tk.Frame(step2_frame, bg=self.CARD_COLOR)
+        keys_frame.pack(fill=tk.X, pady=5)
+        
+        tk.Label(keys_frame, text="Number of Keys:", 
+                font=("Segoe UI", 9, "bold"), bg=self.CARD_COLOR, width=15, anchor="w").pack(side=tk.LEFT)
+        ttk.Spinbox(keys_frame, from_=1, to=5, textvariable=self.num_keys_var, width=5).pack(side=tk.LEFT)
+        tk.Label(keys_frame, text="(1-5, e.g., Key A, Key B, etc.)", 
+                font=("Segoe UI", 8), bg=self.CARD_COLOR, fg="#666").pack(side=tk.LEFT, padx=(10, 0))
+        
+        # MCQ max points
+        mcq_frame = tk.Frame(step2_frame, bg=self.CARD_COLOR)
+        mcq_frame.pack(fill=tk.X, pady=5)
+        
+        tk.Label(mcq_frame, text="MCQ Max Points:", 
+                font=("Segoe UI", 9, "bold"), bg=self.CARD_COLOR, width=15, anchor="w").pack(side=tk.LEFT)
+        ttk.Spinbox(mcq_frame, from_=0, to=1000, textvariable=self.mcq_points_var, width=10).pack(side=tk.LEFT)
+        tk.Label(mcq_frame, text="(0 = skip MCQ section)", 
+                font=("Segoe UI", 8), bg=self.CARD_COLOR, fg="#666").pack(side=tk.LEFT, padx=(10, 0))
+        
+        # Written max points
+        written_frame = tk.Frame(step2_frame, bg=self.CARD_COLOR)
+        written_frame.pack(fill=tk.X, pady=5)
+        
+        tk.Label(written_frame, text="Written Max Points:", 
+                font=("Segoe UI", 9, "bold"), bg=self.CARD_COLOR, width=15, anchor="w").pack(side=tk.LEFT)
+        ttk.Spinbox(written_frame, from_=0, to=1000, textvariable=self.written_points_var, width=10).pack(side=tk.LEFT)
+        tk.Label(written_frame, text="(0 = skip written section)", 
+                font=("Segoe UI", 8), bg=self.CARD_COLOR, fg="#666").pack(side=tk.LEFT, padx=(10, 0))
+        
+        # Start button
+        start_frame = tk.Frame(step2_frame, bg=self.CARD_COLOR)
+        start_frame.pack(fill=tk.X, pady=(15, 0))
+        
+        self.start_btn = ttk.Button(start_frame, text="▶ Start Answer Entry", 
+                                   command=self.on_start_entry,
+                                   style="Accent.TButton",
+                                   state=DISABLED)
+        self.start_btn.pack(anchor="w")
+        
+        self.config_card = config_card
     
     def create_status_bar(self, parent):
-        """Create status bar at bottom"""
+        """Create status bar"""
         status_frame = tk.Frame(parent, bg=self.BG_COLOR)
-        status_frame.pack(fill=tk.X, side=tk.BOTTOM, pady=(15, 0))
+        status_frame.pack(fill=tk.X, side=tk.BOTTOM)
         
         tk.Label(status_frame, textvariable=self.status_var, 
                 font=("Segoe UI", 9), foreground="#666", bg=self.BG_COLOR).pack(side=tk.LEFT)
@@ -214,50 +196,8 @@ class AnswerKeyUI:
         ttk.Button(status_frame, text="Exit", 
                   command=self.root.destroy).pack(side=tk.RIGHT)
     
-    def on_count_change(self, *args):
-        """Handle count change safely (Spinbox may return empty string)"""
-        
-        def safe_int(var):
-            try:
-                value = var.get()
-                return int(value)
-            except Exception:
-                return 0
-
-        mcq_points = safe_int(self.mcq_count_var)
-        written_points = safe_int(self.written_count_var)
-
-        # Calculate points per question
-        mcq_per_q = (mcq_points / self.mcq_available) if self.mcq_available > 0 and mcq_points > 0 else 0
-        written_per_q = (written_points / self.written_available) if self.written_available > 0 and written_points > 0 else 0
-
-        # Update MCQ label
-        if mcq_points > 0:
-            self.mcq_info_label.config(
-                text=f"({self.mcq_available} questions × {mcq_per_q:.2f} points each)"
-            )
-        else:
-            self.mcq_info_label.config(text=f"({self.mcq_available} MCQ questions available)")
-
-        # Update Written label
-        if written_points > 0:
-            self.written_info_label.config(
-                text=f"({self.written_available} questions × {written_per_q:.2f} points each)"
-            )
-        else:
-            self.written_info_label.config(text=f"({self.written_available} written questions available)")
-
-        # Validation
-        if mcq_points == 0 and written_points == 0:
-            self.status_var.set("⚠️ At least one section must have points")
-            self.continue_btn.config(state=tk.DISABLED)
-        else:
-            total_points = mcq_points + written_points
-            self.status_var.set(f"✓ Total exam worth: {total_points} points ({mcq_points} MCQ + {written_points} Written)")
-            self.continue_btn.config(state=tk.NORMAL)
-    
     def on_load_template(self):
-        """Handle template loading"""
+        """Load template"""
         template_dir = os.path.join(get_project_root(), 'template')
         
         template_path = select_file(
@@ -270,87 +210,241 @@ class AnswerKeyUI:
         if not template_path:
             return
         
-        # Load via flow
         success, error, template_info = self.flow.load_template(template_path)
         
         if not success:
             messagebox.showerror("Error", f"Failed to load template:\n{error}")
             return
         
-        # Update UI
         self.template_var.set(template_info['name'])
-        total_q = template_info['total_questions']
-        mcq_avail = template_info.get('mcq_questions_available', 0)
-        written_avail = template_info.get('written_questions_available', 0)
-        
-        self.questions_var.set(f"{total_q} ({mcq_avail} MCQ + {written_avail} Written available)")
-        self.status_var.set("Template loaded successfully ✓")
-        
-        # Store available counts for validation
-        self.mcq_available = mcq_avail
-        self.written_available = written_avail
-        
-        # Show configuration card
-        self.create_config_card()
+        self.status_var.set(f"✓ Template loaded: {template_info['mcq_questions_available']} MCQ + "
+                           f"{template_info['written_questions_available']} Written questions")
+        self.start_btn.config(state=NORMAL)
     
-    def on_configure_sections(self):
-        mcq_points = self.mcq_count_var.get()
-        written_points = self.written_count_var.get()
-
-        success, error = self.flow.set_question_counts(mcq_points, written_points)
-        if not success:
-            messagebox.showerror("Error", error)
+    def on_start_entry(self):
+        """Start answer entry after configuration"""
+        exam_name = self.exam_name_var.get()
+        num_keys = self.num_keys_var.get()
+        mcq_points = self.mcq_points_var.get()
+        written_points = self.written_points_var.get()
+        
+        # Validate
+        if not exam_name.strip():
+            messagebox.showerror("Error", "Exam name cannot be empty")
             return
-
-        # ❗ Destroy entire config frame so it leaves no empty space
-        self.config_frame.destroy()
-
-        # Recreate a new blank frame so layout remains consistent if needed later
-        self.config_frame = tk.Frame(self.root, bg=self.BG_COLOR)
-        self.config_frame.pack_forget()
-
-        # Make answer frame take its place with no gap
-        self.answer_frame.pack_forget()
-        self.answer_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 0))
-
+        
+        # Configure exam
+        success, error = self.flow.configure_exam(exam_name, num_keys, mcq_points, written_points)
+        
+        if not success:
+            messagebox.showerror("Error", f"Configuration error:\n{error}")
+            return
+        
+        # Hide config card and show answer entry
+        self.config_card.pack_forget()
         self.show_answer_entry_ui()
-
-
+        
+        # Enable save button
+        self.save_btn.config(state=NORMAL)
     
     def show_answer_entry_ui(self):
-        """Show the answer entry UI with two panels"""
+        """Show answer entry interface"""
         # Clear existing
-        for widget in self.answer_frame.winfo_children():
+        for widget in self.key_entry_frame.winfo_children():
             widget.destroy()
         
-        # Create two-panel layout - IMPORTANT: Give it weight to expand
-        panels_container = tk.Frame(self.answer_frame, bg=self.BG_COLOR)
-        panels_container.pack(fill=tk.BOTH, expand=True, pady=0)
+        # Container with key selector and answer panels
+        container = tk.Frame(self.key_entry_frame, bg=self.BG_COLOR)
+        container.pack(fill=tk.BOTH, expand=True)
         
-        # Configure grid weights so panels expand properly
+        # Quick fill buttons (if MCQ exists)
+        if self.flow.mcq_count > 0:
+            self.create_quick_fill_buttons(container)
+        
+        # Key selector bar at top
+        self.create_key_selector_bar(container)
+        
+        # Answer entry panels (MCQ + Written)
+        panels_container = tk.Frame(container, bg=self.BG_COLOR)
+        panels_container.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+        
         panels_container.grid_rowconfigure(0, weight=1)
         panels_container.grid_columnconfigure(0, weight=1)
         panels_container.grid_columnconfigure(1, weight=1)
         
-        # MCQ Panel (Left) - Use grid instead of pack
+        # MCQ Panel
         if self.flow.mcq_count > 0:
-            self.create_mcq_panel_grid(panels_container, column=0)
+            self.create_mcq_panel(panels_container, column=0)
         
-        # Written Panel (Right) - Use grid instead of pack
+        # Written Panel
         if self.flow.written_count > 0:
             col = 1 if self.flow.mcq_count > 0 else 0
-            self.create_written_panel_grid(panels_container, column=col)
+            self.create_written_panel(panels_container, column=col)
         
         # Control buttons
-        self.create_control_buttons(self.answer_frame)
+        self.create_control_buttons(container)
     
-    def create_mcq_panel_grid(self, parent, column):
-        """Create MCQ answer entry panel using grid layout"""
+    def create_quick_fill_buttons(self, parent):
+        """Create quick fill buttons for batch MCQ answer setting"""
+        quick_fill_frame = tk.Frame(parent, bg="#e8f5e8")
+        quick_fill_frame.pack(fill=tk.X, pady=(0, 10), padx=10)
+        
+        quick_fill_inner = tk.Frame(quick_fill_frame, bg="#e8f5e8")
+        quick_fill_inner.pack(fill=tk.X, padx=15, pady=8)
+        
+        tk.Label(quick_fill_inner, text="Quick Fill MCQ Answers:", 
+                font=("Segoe UI", 10, "bold"), bg="#e8f5e8").pack(side=tk.LEFT, padx=(0, 15))
+        
+        # Button styles
+        self.quick_fill_buttons = {}
+        
+        # All A button (Green)
+        btn_a = tk.Button(quick_fill_inner, text="Set All A", font=("Segoe UI", 9, "bold"),
+                         bg=self.BUTTON_COLORS['A'], fg="white", relief="flat",
+                         command=lambda: self.on_quick_fill('all_A', "all A"))
+        btn_a.pack(side=tk.LEFT, padx=5, ipadx=15, ipady=5)
+        self.quick_fill_buttons['all_A'] = btn_a
+        
+        # All B button (Blue)
+        btn_b = tk.Button(quick_fill_inner, text="Set All B", font=("Segoe UI", 9, "bold"),
+                         bg=self.BUTTON_COLORS['B'], fg="white", relief="flat",
+                         command=lambda: self.on_quick_fill('all_B', "all B"))
+        btn_b.pack(side=tk.LEFT, padx=5, ipadx=15, ipady=5)
+        self.quick_fill_buttons['all_B'] = btn_b
+        
+        # All C button (Orange)
+        btn_c = tk.Button(quick_fill_inner, text="Set All C", font=("Segoe UI", 9, "bold"),
+                         bg=self.BUTTON_COLORS['C'], fg="white", relief="flat",
+                         command=lambda: self.on_quick_fill('all_C', "all C"))
+        btn_c.pack(side=tk.LEFT, padx=5, ipadx=15, ipady=5)
+        self.quick_fill_buttons['all_C'] = btn_c
+        
+        # All D button (Red)
+        btn_d = tk.Button(quick_fill_inner, text="Set All D", font=("Segoe UI", 9, "bold"),
+                         bg=self.BUTTON_COLORS['D'], fg="white", relief="flat",
+                         command=lambda: self.on_quick_fill('all_D', "all D"))
+        btn_d.pack(side=tk.LEFT, padx=5, ipadx=15, ipady=5)
+        self.quick_fill_buttons['all_D'] = btn_d
+        
+        # Random button (Purple)
+        btn_random = tk.Button(quick_fill_inner, text="Set Random", font=("Segoe UI", 9, "bold"),
+                              bg=self.BUTTON_COLORS['random'], fg="white", relief="flat",
+                              command=lambda: self.on_quick_fill('random', "random"))
+        btn_random.pack(side=tk.LEFT, padx=5, ipadx=15, ipady=5)
+        self.quick_fill_buttons['random'] = btn_random
+        
+        # Apply to dropdown
+        tk.Label(quick_fill_inner, text="Apply to:", 
+                font=("Segoe UI", 9), bg="#e8f5e8").pack(side=tk.LEFT, padx=(15, 5))
+        
+        self.apply_to_var = StringVar(value="current")
+        apply_to_dropdown = ttk.Combobox(quick_fill_inner, textvariable=self.apply_to_var,
+                                        values=["current key only", "all keys"],
+                                        state="readonly", width=15)
+        apply_to_dropdown.pack(side=tk.LEFT)
+        
+        # Help text
+        tk.Label(quick_fill_inner, text="💡 Quickly set all MCQ answers for current or all keys",
+                font=("Segoe UI", 8), fg="#2e7d32", bg="#e8f5e8").pack(side=tk.RIGHT, padx=(20, 0))
+    
+    def create_key_selector_bar(self, parent):
+        """Create key selector bar"""
+        selector_frame = tk.Frame(parent, bg=self.KEY_SELECTOR_COLOR)
+        selector_frame.pack(fill=tk.X, pady=(0, 10), padx=10)
+        
+        selector_inner = tk.Frame(selector_frame, bg=self.KEY_SELECTOR_COLOR)
+        selector_inner.pack(fill=tk.X, padx=15, pady=10)
+        
+        tk.Label(selector_inner, text="Select Key to Edit:", 
+                font=("Segoe UI", 10, "bold"), bg=self.KEY_SELECTOR_COLOR).pack(side=tk.LEFT, padx=(0, 15))
+        
+        # Key buttons
+        key_letters = ['A', 'B', 'C', 'D', 'E']
+        self.key_buttons = {}
+        
+        for i in range(self.flow.num_keys):
+            letter = key_letters[i]
+            btn = ttk.Button(selector_inner, text=f"Key {letter}", 
+                           command=lambda l=letter: self.on_switch_key(l),
+                           width=10)
+            btn.pack(side=tk.LEFT, padx=5)
+            self.key_buttons[letter] = btn
+        
+        # Current key indicator
+        self.key_indicator = tk.Label(selector_inner, text=f"Currently editing: Key A", 
+                                     font=("Segoe UI", 10, "bold"), bg=self.KEY_SELECTOR_COLOR, 
+                                     fg="#6a1b9a")
+        self.key_indicator.pack(side=tk.LEFT, padx=(20, 0))
+        
+        # Progress indicator
+        self.progress_label = tk.Label(selector_inner, text="0% complete", 
+                                      font=("Segoe UI", 9), bg=self.KEY_SELECTOR_COLOR, fg="#666")
+        self.progress_label.pack(side=tk.RIGHT, padx=(20, 0))
+    
+    def on_switch_key(self, key_letter):
+        """Switch to a different key"""
+        success, error = self.flow.switch_key(key_letter)
+        
+        if not success:
+            messagebox.showerror("Error", error)
+            return
+        
+        # Update UI
+        self.current_key_var.set(key_letter)
+        self.key_indicator.config(text=f"Currently editing: Key {key_letter}")
+        
+        # Reload entry fields with current key's answers
+        self.reload_answer_entries()
+        
+        # Update progress
+        self.update_progress()
+    
+    def on_quick_fill(self, pattern, display_name):
+        """Handle quick fill button click"""
+        apply_to = self.apply_to_var.get()
+        
+        if apply_to == "current key only":
+            success, error, count_set = self.flow.set_all_mcq_answers(pattern)
+            
+            if success:
+                self.status_var.set(f"✓ Set {count_set} MCQ answers to {display_name} for current key")
+                self.reload_answer_entries()
+                self.update_progress()
+            else:
+                messagebox.showerror("Error", f"Failed to set answers: {error}")
+        else:
+            # Apply to all keys
+            result = messagebox.askyesno("Apply to All Keys", 
+                                         f"Set all MCQ answers to {display_name} for ALL {self.flow.num_keys} keys?\n"
+                                         "This will overwrite existing MCQ answers for all keys.")
+            
+            if result:
+                success, error, results = self.flow.set_all_mcq_answers_all_keys(pattern)
+                
+                if success:
+                    total_set = 0
+                    success_keys = []
+                    for letter, result_info in results.items():
+                        if result_info['success']:
+                            total_set += result_info['count_set']
+                            success_keys.append(letter)
+                    
+                    self.status_var.set(f"✓ Set {total_set} MCQ answers to {display_name} for keys: {', '.join(success_keys)}")
+                    
+                    # Reload current key's entries
+                    if self.flow.current_key_letter in success_keys:
+                        self.reload_answer_entries()
+                    
+                    self.update_progress()
+                else:
+                    messagebox.showerror("Error", f"Failed to set answers: {error}")
+    
+    def create_mcq_panel(self, parent, column):
+        """Create MCQ entry panel"""
         mcq_panel = tk.Frame(parent, bg=self.MCQ_COLOR, relief="flat")
         mcq_panel.grid(row=0, column=column, sticky="nsew", padx=(0, 5 if column == 0 else 0))
         
-        # Configure row weight so scrollable area expands
-        mcq_panel.grid_rowconfigure(2, weight=10) # Row 2 is the scrollable area
+        mcq_panel.grid_rowconfigure(2, weight=1)
         mcq_panel.grid_columnconfigure(0, weight=1)
         
         # Header
@@ -358,30 +452,22 @@ class AnswerKeyUI:
         header.grid(row=0, column=0, sticky="ew")
         
         header_inner = tk.Frame(header, bg="#1976d2")
-        header_inner.pack(fill=tk.X, padx=8, pady=6)
+        header_inner.pack(fill=tk.X, padx=15, pady=10)
         
-        tk.Label(header_inner, text="📝 Multiple Choice Questions", 
+        tk.Label(header_inner, text="📝 Multiple Choice", 
                 font=("Segoe UI", 12, "bold"), bg="#1976d2", fg="white").pack(side=tk.LEFT)
-        
-        progress_label = tk.Label(header_inner, textvariable=self.mcq_progress_var,
-                                 font=("Segoe UI", 11, "bold"), bg="#1976d2", fg="white")
-        progress_label.pack(side=tk.RIGHT)
-        
-        tk.Label(header_inner, text=f" / {self.flow.mcq_count}",
-                font=("Segoe UI", 11), bg="#1976d2", fg="white").pack(side=tk.RIGHT)
         
         # Tip
         tip_frame = tk.Frame(mcq_panel, bg=self.MCQ_COLOR)
         tip_frame.grid(row=1, column=0, sticky="ew", padx=15, pady=8)
         
-        tk.Label(tip_frame, text="💡 Tip: Enter answers as A, B, C, or D. Multiple answers: A,B,C",
+        tk.Label(tip_frame, text="💡 Enter A, B, C, or D. Multiple answers: A,B,C",
                 font=("Segoe UI", 8), fg="#1565c0", bg=self.MCQ_COLOR).pack(anchor="w")
         
-        # Scrollable area - THIS MUST EXPAND
+        # Scrollable area
         scroll_container = tk.Frame(mcq_panel, bg=self.MCQ_COLOR)
-        scroll_container.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0, 2))
+        scroll_container.grid(row=2, column=0, sticky="nsew", padx=15, pady=(0, 10))
         
-        # Configure scroll_container to expand
         scroll_container.grid_rowconfigure(0, weight=1)
         scroll_container.grid_columnconfigure(0, weight=1)
         
@@ -394,7 +480,6 @@ class AnswerKeyUI:
         
         canvas_window = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
         
-        # Make canvas window expand with canvas width
         def on_canvas_configure(event):
             canvas.itemconfig(canvas_window, width=event.width)
         
@@ -402,37 +487,47 @@ class AnswerKeyUI:
         canvas.configure(yscrollcommand=scrollbar.set)
         
         # Create MCQ entries
-        self.create_mcq_entries(scrollable_frame)
+        self.mcq_entries = []
+        max_per_col = 12
+        total = self.flow.mcq_count
+        columns = (total + max_per_col - 1) // max_per_col
+        
+        col_frames = []
+        for col in range(columns):
+            col_frame = tk.Frame(scrollable_frame, bg=self.MCQ_COLOR)
+            col_frame.pack(side=tk.LEFT, fill=tk.Y, padx=10)
+            col_frames.append(col_frame)
+        
+        q_index = 0
+        for col in range(columns):
+            for row in range(max_per_col):
+                q_num = q_index + 1
+                if q_num > total:
+                    break
+                
+                row_frame = tk.Frame(col_frames[col], bg=self.MCQ_COLOR)
+                row_frame.pack(fill=tk.X, pady=4)
+                
+                tk.Label(row_frame, text=f"Q{q_num}.", width=5, anchor="e",
+                        font=("Segoe UI", 10, "bold"), bg=self.MCQ_COLOR, fg="#1565c0").pack(side=tk.LEFT, padx=(0, 6))
+                
+                entry = ttk.Entry(row_frame, width=10, font=("Segoe UI", 11), justify="center")
+                entry.pack(side=tk.LEFT)
+                self.mcq_entries.append((q_num, entry))
+                
+                entry.bind('<KeyRelease>', lambda e, q=q_num, ent=entry: self.on_mcq_answer_change(q, ent))
+                
+                q_index += 1
         
         canvas.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
-        
-        # Enable mousewheel scrolling
-        def on_mousewheel(event):
-            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        
-        canvas.bind_all("<MouseWheel>", on_mousewheel)
-        
-        # Auto-fill button
-        btn_frame = tk.Frame(mcq_panel, bg=self.MCQ_COLOR)
-        btn_frame.grid(row=3, column=0, sticky="ew", padx=15, pady=(0, 15))
-        
-        ttk.Button(btn_frame, text="Auto Fill (A,B,C,D...)", 
-                  command=self.on_auto_fill_mcq).pack(side=tk.LEFT)
-        ttk.Button(btn_frame, text="Clear MCQ", 
-                  command=self.on_clear_mcq).pack(side=tk.LEFT, padx=(10, 0))
     
-    def create_mcq_panel(self, parent):
-        """Wrapper for backward compatibility"""
-        self.create_mcq_panel_grid(parent, column=0)
-    
-    def create_written_panel_grid(self, parent, column):
-        """Create written answer entry panel using grid layout"""
+    def create_written_panel(self, parent, column):
+        """Create written answer entry panel"""
         written_panel = tk.Frame(parent, bg=self.WRITTEN_COLOR, relief="flat")
         written_panel.grid(row=0, column=column, sticky="nsew", padx=(5 if column > 0 else 0, 0))
         
-        # Configure row weight so scrollable area expands
-        written_panel.grid_rowconfigure(2, weight=10) # Row 2 is the scrollable area
+        written_panel.grid_rowconfigure(2, weight=1)
         written_panel.grid_columnconfigure(0, weight=1)
         
         # Header
@@ -440,30 +535,22 @@ class AnswerKeyUI:
         header.grid(row=0, column=0, sticky="ew")
         
         header_inner = tk.Frame(header, bg="#f57c00")
-        header_inner.pack(fill=tk.X, padx=15, pady=12)
+        header_inner.pack(fill=tk.X, padx=15, pady=10)
         
-        tk.Label(header_inner, text="🔢 Written Answer Questions", 
+        tk.Label(header_inner, text="🔢 Written Answers", 
                 font=("Segoe UI", 12, "bold"), bg="#f57c00", fg="white").pack(side=tk.LEFT)
-        
-        progress_label = tk.Label(header_inner, textvariable=self.written_progress_var,
-                                 font=("Segoe UI", 11, "bold"), bg="#f57c00", fg="white")
-        progress_label.pack(side=tk.RIGHT)
-        
-        tk.Label(header_inner, text=f" / {self.flow.written_count}",
-                font=("Segoe UI", 11), bg="#f57c00", fg="white").pack(side=tk.RIGHT)
         
         # Tip
         tip_frame = tk.Frame(written_panel, bg=self.WRITTEN_COLOR)
         tip_frame.grid(row=1, column=0, sticky="ew", padx=15, pady=8)
         
-        tk.Label(tip_frame, text="💡 Tip: Enter numeric answers (integers or decimals)",
+        tk.Label(tip_frame, text="💡 Enter numeric answers (integers or decimals)",
                 font=("Segoe UI", 8), fg="#e65100", bg=self.WRITTEN_COLOR).pack(anchor="w")
         
-        # Scrollable area - THIS MUST EXPAND
+        # Scrollable area
         scroll_container = tk.Frame(written_panel, bg=self.WRITTEN_COLOR)
-        scroll_container.grid(row=2, column=0, sticky="nsew", padx=15, pady=(0, 5))  
+        scroll_container.grid(row=2, column=0, sticky="nsew", padx=15, pady=(0, 10))
         
-        # Configure scroll_container to expand
         scroll_container.grid_rowconfigure(0, weight=1)
         scroll_container.grid_columnconfigure(0, weight=1)
         
@@ -476,7 +563,6 @@ class AnswerKeyUI:
         
         canvas_window = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
         
-        # Make canvas window expand with canvas width
         def on_canvas_configure(event):
             canvas.itemconfig(canvas_window, width=event.width)
         
@@ -484,132 +570,38 @@ class AnswerKeyUI:
         canvas.configure(yscrollcommand=scrollbar.set)
         
         # Create written entries
-        self.create_written_entries(scrollable_frame)
+        self.written_entries = []
+        written_start = self.flow.mcq_count + 1
+        
+        for i in range(self.flow.written_count):
+            q_num = written_start + i
+            
+            row_frame = tk.Frame(scrollable_frame, bg=self.WRITTEN_COLOR)
+            row_frame.pack(fill=tk.X, pady=4)
+            
+            tk.Label(row_frame, text=f"Q{q_num}.", width=5, anchor="e",
+                    font=("Segoe UI", 10, "bold"), bg=self.WRITTEN_COLOR, fg="#e65100").pack(side=tk.LEFT, padx=(0, 6))
+            
+            entry = ttk.Entry(row_frame, width=10, font=("Segoe UI", 11), justify="center")
+            entry.pack(side=tk.LEFT)
+            self.written_entries.append((q_num, entry))
+            
+            entry.bind('<KeyRelease>', lambda e, q=q_num, ent=entry: self.on_written_answer_change(q, ent))
         
         canvas.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
-        
-        # Enable mousewheel scrolling
-        def on_mousewheel(event):
-            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        
-        canvas.bind_all("<MouseWheel>", on_mousewheel)
-        
-        # Auto-fill button
-        btn_frame = tk.Frame(written_panel, bg=self.WRITTEN_COLOR)
-        btn_frame.grid(row=3, column=0, sticky="ew", padx=15, pady=(0, 15))
-        
-        ttk.Button(btn_frame, text="Fill All with 0", 
-                  command=self.on_auto_fill_written).pack(side=tk.LEFT)
-        ttk.Button(btn_frame, text="Clear Written", 
-                  command=self.on_clear_written).pack(side=tk.LEFT, padx=(10, 0))
-    
-    def create_written_panel(self, parent):
-        """Wrapper for backward compatibility"""
-        self.create_written_panel_grid(parent, column=1)
-    
-    def create_mcq_entries(self, parent):
-        """Create MCQ entry fields in multiple columns (max 12 per column)"""
-        self.mcq_entries = []
-
-        max_per_col = 12
-        total = self.flow.mcq_count
-        columns = (total + max_per_col - 1) // max_per_col  # ceil division
-
-        col_frames = []
-
-        for col in range(columns):
-            col_frame = tk.Frame(parent, bg=self.MCQ_COLOR)
-            col_frame.pack(side=tk.LEFT, fill=tk.Y, padx=10)
-            col_frames.append(col_frame)
-
-        q_index = 0
-        for col in range(columns):
-            for row in range(max_per_col):
-                q_num = q_index + 1
-                if q_num > total:
-                    break
-
-                row_frame = tk.Frame(col_frames[col], bg=self.MCQ_COLOR)
-                row_frame.pack(fill=tk.X, pady=4)
-
-                tk.Label(
-                    row_frame,
-                    text=f"Q{q_num}.",
-                    width=5,
-                    anchor="e",
-                    font=("Segoe UI", 10, "bold"),
-                    bg=self.MCQ_COLOR,
-                    fg="#1565c0"
-                ).pack(side=tk.LEFT, padx=(0, 6))
-
-                entry = ttk.Entry(row_frame, width=10, font=("Segoe UI", 11), justify="center")
-                entry.pack(side=tk.LEFT)
-
-                self.mcq_entries.append(entry)
-
-                entry.bind('<KeyRelease>', lambda e, q=q_num, ent=entry: self.on_mcq_answer_change(q, ent))
-                entry.bind('<Return>', lambda e, q=q_num: self.on_mcq_enter_press(q))
-
-                q_index += 1
-
-    
-    def create_written_entries(self, parent):
-        """Create written entry fields with larger height area"""
-        self.written_entries = []
-        written_start = self.flow.mcq_count + 1
-
-        for i in range(self.flow.written_count):
-            q_num = written_start + i
-
-            row_frame = tk.Frame(parent, bg=self.WRITTEN_COLOR)
-            row_frame.pack(fill=tk.X, pady=4)
-
-            tk.Label(
-                row_frame,
-                text=f"Q{q_num}.",
-                width=5,
-                anchor="e",
-                font=("Segoe UI", 10, "bold"),
-                bg=self.WRITTEN_COLOR,
-                fg="#e65100"
-            ).pack(side=tk.LEFT, padx=(0, 6))
-
-            entry = ttk.Entry(row_frame, width=10, font=("Segoe UI", 11), justify="center")
-            entry.pack(side=tk.LEFT)
-            self.written_entries.append(entry)
-
-            entry.bind('<KeyRelease>', lambda e, q=q_num, ent=entry: self.on_written_answer_change(q, ent))
-            entry.bind('<Return>', lambda e, idx=i: self.on_written_enter_press(idx))
-    
-    def create_control_buttons(self, parent):
-        """Create control buttons"""
-        control_frame = tk.Frame(parent, bg=self.BG_COLOR)
-        control_frame.pack(fill=tk.X, pady=(0, 0))
-        
-        ttk.Button(control_frame, text="Clear All", 
-                  command=self.on_clear_all).pack(side=tk.LEFT)
-        
-        ttk.Button(control_frame, text="Cancel", 
-                  command=self.root.destroy).pack(side=tk.RIGHT, padx=(10, 0))
-        
-        self.save_btn = ttk.Button(control_frame, text="💾 Save Answer Key", 
-                                   command=self.on_save, 
-                                   state=DISABLED,
-                                   style="Accent.TButton")
-        self.save_btn.pack(side=tk.RIGHT)
     
     def on_mcq_answer_change(self, question_num, entry):
-        """Handle MCQ answer input change"""
+        """Handle MCQ answer change"""
         answer_input = entry.get().strip().upper()
         
         if not answer_input:
-            # Clear answer
-            if str(question_num) in self.flow.mcq_answers:
-                del self.flow.mcq_answers[str(question_num)]
+            # Get current key object
+            current_key = self.flow.answer_keys[self.flow.current_key_letter]
+            if str(question_num) in current_key.mcq_answers:
+                del current_key.mcq_answers[str(question_num)]
             entry.config(style="TEntry")
         else:
-            # Set answer (flow handles validation)
             success, error = self.flow.set_mcq_answer(question_num, answer_input)
             
             if success:
@@ -617,20 +609,19 @@ class AnswerKeyUI:
             else:
                 entry.config(style="TEntry")
         
-        # Update progress
         self.update_progress()
     
     def on_written_answer_change(self, question_num, entry):
-        """Handle written answer input change"""
+        """Handle written answer change"""
         answer_input = entry.get().strip()
         
         if not answer_input:
-            # Clear answer
-            if str(question_num) in self.flow.written_answers:
-                del self.flow.written_answers[str(question_num)]
+            # Get current key object
+            current_key = self.flow.answer_keys[self.flow.current_key_letter]
+            if str(question_num) in current_key.written_answers:
+                del current_key.written_answers[str(question_num)]
             entry.config(style="TEntry")
         else:
-            # Set answer (flow handles validation)
             success, error = self.flow.set_written_answer(question_num, answer_input)
             
             if success:
@@ -638,138 +629,107 @@ class AnswerKeyUI:
             else:
                 entry.config(style="TEntry")
         
-        # Update progress
         self.update_progress()
     
-    def on_mcq_enter_press(self, question_num):
-        """Handle Enter key press in MCQ"""
-        if question_num < self.flow.mcq_count and question_num < len(self.mcq_entries):
-            self.mcq_entries[question_num].focus()
-        elif self.written_entries:
-            # Jump to first written entry
-            self.written_entries[0].focus()
-    
-    def on_written_enter_press(self, index):
-        """Handle Enter key press in written"""
-        if index < len(self.written_entries) - 1:
-            self.written_entries[index + 1].focus()
+    def reload_answer_entries(self):
+        """Reload entry fields when switching keys"""
+        # Get current key object
+        current_key = self.flow.answer_keys[self.flow.current_key_letter]
+        
+        # Reload MCQ entries
+        for q_num, entry in self.mcq_entries:
+            entry.delete(0, tk.END)
+            if str(q_num) in current_key.mcq_answers:
+                entry.insert(0, ','.join(current_key.mcq_answers[str(q_num)]))
+                entry.config(style="Valid.TEntry")
+            else:
+                entry.config(style="TEntry")
+        
+        # Reload written entries
+        for q_num, entry in self.written_entries:
+            entry.delete(0, tk.END)
+            if str(q_num) in current_key.written_answers:
+                entry.insert(0, str(current_key.written_answers[str(q_num)]))
+                entry.config(style="Valid.TEntry")
+            else:
+                entry.config(style="TEntry")
     
     def update_progress(self):
         """Update progress display"""
-        progress = self.flow.get_progress()
+        # Overall progress across all keys
+        all_progress = self.flow.get_all_keys_progress()
         
-        self.mcq_progress_var.set(str(progress['mcq']['answered']))
-        self.written_progress_var.set(str(progress['written']['answered']))
+        total_answered = 0
+        total_expected = 0
         
-        # Enable/disable save button
-        self.save_btn.config(state=NORMAL if progress['overall']['is_complete'] else DISABLED)
+        for letter, progress in all_progress.items():
+            total_answered += progress['overall']['answered']
+            total_expected += progress['overall']['total']
         
-        # Update status
-        if progress['overall']['is_complete']:
-            self.status_var.set("✓ All answers filled! Ready to save.")
+        percentage = (total_answered / total_expected * 100) if total_expected > 0 else 0
+        
+        self.progress_label.config(text=f"{percentage:.0f}% complete ({total_answered}/{total_expected})")
+        
+        # Current key completion
+        current_progress = self.flow.get_current_key_progress()
+        
+        if current_progress['overall']['is_complete']:
+            self.status_var.set(f"✓ Key {self.flow.current_key_letter} complete")
         else:
-            self.status_var.set(f"Progress: {progress['overall']['answered']}/{progress['overall']['total']} questions")
+            self.status_var.set(f"Key {self.flow.current_key_letter}: "
+                              f"{current_progress['overall']['answered']}/{current_progress['overall']['total']} answered")
     
-    def on_auto_fill_mcq(self):
-        """Handle MCQ auto-fill button"""
-        success, error = self.flow.auto_fill_mcq_pattern('sequential')
+    def create_control_buttons(self, parent):
+        """Create control buttons"""
+        control_frame = tk.Frame(parent, bg=self.BG_COLOR)
+        control_frame.pack(fill=tk.X, pady=(10, 0))
         
-        if success:
-            # Update all MCQ entries
-            for i, entry in enumerate(self.mcq_entries):
-                q_num = str(i + 1)
-                if q_num in self.flow.mcq_answers:
-                    entry.delete(0, tk.END)
-                    entry.insert(0, ','.join(self.flow.mcq_answers[q_num]))
-                    entry.config(style="Valid.TEntry")
-            
-            self.update_progress()
-        else:
-            messagebox.showerror("Error", error)
+        ttk.Button(control_frame, text="Back to Config", 
+                  command=self.show_configuration).pack(side=tk.LEFT)
+        
+        ttk.Button(control_frame, text="Cancel", 
+                  command=self.root.destroy).pack(side=tk.RIGHT, padx=(10, 0))
+        
+        self.save_btn = ttk.Button(control_frame, text="💾 Save All Keys", 
+                                  command=self.on_save,
+                                  state=DISABLED,
+                                  style="Accent.TButton")
+        self.save_btn.pack(side=tk.RIGHT)
     
-    def on_auto_fill_written(self):
-        """Handle written auto-fill button"""
-        success, error = self.flow.auto_fill_written_pattern(0)
+    def show_configuration(self):
+        """Show configuration panel again"""
+        for widget in self.key_entry_frame.winfo_children():
+            widget.destroy()
         
-        if success:
-            # Update all written entries
-            for i, entry in enumerate(self.written_entries):
-                q_num = str(self.flow.mcq_count + i + 1)
-                if q_num in self.flow.written_answers:
-                    entry.delete(0, tk.END)
-                    entry.insert(0, str(self.flow.written_answers[q_num]))
-                    entry.config(style="Valid.TEntry")
-            
-            self.update_progress()
-        else:
-            messagebox.showerror("Error", error)
-    
-    def on_clear_mcq(self):
-        """Handle clear MCQ button"""
-        self.flow.mcq_answers = {}
-        
-        for entry in self.mcq_entries:
-            entry.delete(0, tk.END)
-            entry.config(style="TEntry")
-        
-        self.update_progress()
-        
-        if self.mcq_entries:
-            self.mcq_entries[0].focus()
-    
-    def on_clear_written(self):
-        """Handle clear written button"""
-        self.flow.written_answers = {}
-        
-        for entry in self.written_entries:
-            entry.delete(0, tk.END)
-            entry.config(style="TEntry")
-        
-        self.update_progress()
-        
-        if self.written_entries:
-            self.written_entries[0].focus()
-    
-    def on_clear_all(self):
-        """Handle clear all button"""
-        self.on_clear_mcq()
-        self.on_clear_written()
+        self.config_card.pack(fill=tk.X, pady=(0, 20))
     
     def on_save(self):
-        """Handle save button"""
-        # Validate
-        valid, error, missing = self.flow.validate_answers()
+        """Save all keys"""
+        # Validate all keys complete
+        valid, error, progress = self.flow.validate_all_keys()
+        
         if not valid:
-            messagebox.showerror("Error", error)
-            return
-        
-        # Prompt for exam name
-        exam_name = simpledialog.askstring("Exam Name", 
-                                          "Enter exam name:",
-                                          initialvalue="Exam")
-        
-        if not exam_name:
+            messagebox.showerror("Error", f"Cannot save:\n{error}")
             return
         
         # Save
-        success, error, saved_path = self.flow.save_answer_key(exam_name=exam_name)
+        success, error, result_dict = self.flow.save_exam_answer_keys()  # Changed from saved_path to result_dict
         
         if success:
-            msg = f"Answer key saved successfully!\n\n"
-            msg += f"File: {os.path.basename(saved_path)}\n"
-            msg += f"MCQ Questions: {self.flow.mcq_count}\n"
-            msg += f"Written Questions: {self.flow.written_count}\n"
-            msg += f"Total: {self.flow.mcq_count + self.flow.written_count}"
+            msg = f"✓ Answer keys saved successfully!\n\n"
+            msg += f"File: {os.path.basename(result_dict['file_path'])}\n"  # Access file_path from result_dict
+            msg += f"Exam: {self.flow.exam_name}\n"
+            msg += f"Keys: {', '.join(self.flow.answer_keys.keys())}\n"
+            msg += f"Questions: {self.flow.mcq_count + self.flow.written_count}"
+            
+            # Add exam ID if available
+            if result_dict.get('exam_id'):
+                msg += f"\nExam ID: {result_dict['exam_id']}"
             
             messagebox.showinfo("Success", msg)
             self.root.destroy()
         else:
             messagebox.showerror("Error", f"Failed to save:\n{error}")
-    
-    def run(self):
-        """Run the UI"""
-        self.root.mainloop()
-
 
 def create_answer_key_ui():
     """Create and run answer key UI"""
@@ -778,5 +738,12 @@ def create_answer_key_ui():
     ui.run()
 
 
+def run():
+    """Run the UI"""
+    root = tk.Tk()
+    ui = AnswerKeyUI(root)
+    ui.root.mainloop()
+
+
 if __name__ == "__main__":
-    create_answer_key_ui()
+    run()

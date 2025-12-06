@@ -51,8 +51,15 @@ class AnswerSheetDesigner:
             'quick_number_height': 25,
             'quick_number_spacing': 8,
             'quick_number_start_from_mc': True,  # If True, numbering continues from MC questions
-            'qn_marker_size': 10,  # Corner markers for quick number section
-            'id_marker_size': 10  # Size of corner markers
+            'qn_marker_size': 9,  # Corner markers for quick number section
+            'id_marker_size': 10,  # Size of corner markers
+            'include_key': True,  # New: Include KEY area
+            'key_options': ['A', 'B', 'C', 'D', 'E'],  # New: Options for KEY area
+            'key_bubble_radius': 8,  # New: Radius for KEY bubbles
+            'key_bubble_spacing': 25,  # New: Spacing between KEY bubbles
+            'key_section_width': 140,  # New: Width of KEY section
+            'key_section_height': 50,  # New: Height of KEY section
+            'key_marker_size': 7,  # New: Size of corner markers for KEY
         }
 
         self.presets = {
@@ -140,6 +147,11 @@ class AnswerSheetDesigner:
                 c.showPage()
             
             self._draw_pdf_header(c, page_width, page_height, page + 1, total_pages)
+            
+            # Draw KEY area on first page
+            if page == 0 and self.design_config['include_key']:
+                self._draw_pdf_key(c, page_width, page_height)
+            
             self._draw_pdf_questions(c, page_width, page_height, page, total_questions)
             
             # Draw Student ID section on first page
@@ -162,10 +174,6 @@ class AnswerSheetDesigner:
             c.drawString(margins['left'], page_height - margins['top'] - 10, "ANSWER SHEET")
             
             c.setFont(font_regular, 9)
-            #c.drawString(page_width - margins['right'] - 40, page_height - margins['top'] - 10, 
-            #            f"Page {current_page}/{total_pages}")
-            
-            c.setFont(font_regular, 9)
             info_y = page_height - margins['top'] - 30
             c.drawString(margins['left'], info_y, "Name: __________________________________________")
             c.drawString(margins['left'] + 180, info_y, "Date: ___________________")
@@ -173,6 +181,77 @@ class AnswerSheetDesigner:
             if self.design_config['include_instructions']:
                 c.setFont(font_regular, 7)
                 c.drawString(margins['left'], info_y - 15, "Use #2 pencil • Fill circles completely")
+    
+    def _draw_pdf_key(self, c, page_width, page_height):
+        """Draw KEY area in top right corner with corner markers - letters inside bubbles, automatically centered"""
+        margins = self.design_config['margins']
+        font_bold = "Lato-Bold" if self.pdf_font_registered else "Helvetica-Bold"
+        font_regular = "Lato" if self.pdf_font_registered else "Helvetica"
+        
+        key_options = self.design_config['key_options']
+        key_bubble_radius = self.design_config['key_bubble_radius']
+        key_section_width = self.design_config['key_section_width']
+        key_section_height = self.design_config['key_section_height']
+        marker_size = self.design_config['key_marker_size']
+        
+        # Position in top right corner
+        start_x = page_width - margins['right'] - key_section_width - 30
+        start_y = page_height - margins['top'] - key_section_height - 16
+        
+        # Calculate centered positioning for bubbles
+        num_options = len(key_options)
+        total_bubble_width = (num_options - 1) * key_bubble_radius * 3  # Approximate spacing
+        
+        # Center bubbles horizontally
+        bubble_start_x = start_x + (key_section_width - total_bubble_width) / 2
+        
+        # Center bubbles vertically within the section
+        bubble_y = start_y + (key_section_height / 2) - key_bubble_radius
+        
+        # Draw "KEY" label on top left of the section
+        c.setFont(font_bold, 11)
+        c.drawString(start_x + 15, start_y + key_section_height - 20, "KEY")
+        
+        # Draw options with bubbles and letters inside (centered)
+        for i, option in enumerate(key_options):
+            bubble_x = bubble_start_x + i * (key_bubble_radius * 3)
+            
+            # Draw hollow bubble
+            c.setStrokeColorRGB(0, 0, 0)
+            c.setFillColorRGB(1, 1, 1)
+            c.circle(bubble_x, bubble_y, key_bubble_radius, stroke=1, fill=0)
+            
+            # Draw letter inside bubble
+            c.setFillColorRGB(0, 0, 0)
+            c.setFont(font_bold, 10)
+            
+            # Center the letter in the bubble
+            text_width = c.stringWidth(option, font_bold, 10)
+            text_x = bubble_x - text_width / 2
+            text_y = bubble_y - 3  # Adjust for vertical centering
+            
+            c.drawString(text_x, text_y, option)
+        
+        # Calculate border box coordinates (for corner markers only)
+        box_x1 = start_x + 5
+        box_y1 = start_y + 5
+        box_x2 = start_x + key_section_width - 5
+        box_y2 = start_y + key_section_height - 5
+        
+        # Draw BLACK SQUARE MARKERS at four corners (NO border box)
+        c.setFillColorRGB(0, 0, 0)
+        
+        # Top-left marker
+        c.rect(box_x1 - marker_size/2, box_y2 - marker_size/2, marker_size, marker_size, stroke=0, fill=1)
+        
+        # Top-right marker
+        c.rect(box_x2 - marker_size/2, box_y2 - marker_size/2, marker_size, marker_size, stroke=0, fill=1)
+        
+        # Bottom-left marker
+        c.rect(box_x1 - marker_size/2, box_y1 - marker_size/2, marker_size, marker_size, stroke=0, fill=1)
+        
+        # Bottom-right marker
+        c.rect(box_x2 - marker_size/2, box_y1 - marker_size/2, marker_size, marker_size, stroke=0, fill=1)
     
     def _draw_pdf_student_id(self, c, page_width, page_height):
         """Draw Student ID block in bottom right with corner markers"""
@@ -333,7 +412,7 @@ class AnswerSheetDesigner:
         end_question = min(start_question + questions_per_page, total_questions)
         questions_this_page = end_question - start_question
         
-        # Calculate layout - NO compression for ID section
+        # Calculate layout - adjust for KEY area if present
         content_width = page_width - margins['left'] - margins['right']
         content_height = page_height - margins['top'] - margins['bottom'] - self.design_config['header_height']
         
@@ -343,7 +422,7 @@ class AnswerSheetDesigner:
         bubble_spacing = self.design_config['bubble_spacing']
         question_number_width = self.design_config['question_number_width']
         
-        # Start questions
+        # Start questions - adjust for KEY area height if present
         start_y = page_height - margins['top'] - self.design_config['header_height']
         
         # Render questions column by column (fill first column completely before moving to next)
@@ -419,6 +498,7 @@ class AnswerSheetDesigner:
             font_bold = ImageFont.truetype(self.lato_font_path['bold'], 11 * scale)
             font_small = ImageFont.truetype(self.lato_font_path['regular'], 9 * scale)
             font_tiny = ImageFont.truetype(self.lato_font_path['bold'], 8 * scale)
+            font_key = ImageFont.truetype(self.lato_font_path['bold'], 12 * scale)
             print("Lato fonts loaded successfully for image")
         except Exception as e:
             print(f"Warning: Could not load Lato fonts for image: {e}")
@@ -428,15 +508,21 @@ class AnswerSheetDesigner:
                 font_bold = ImageFont.truetype("arialbd.ttf", 11 * scale)
                 font_small = ImageFont.truetype("arial.ttf", 9 * scale)
                 font_tiny = ImageFont.truetype("arialbd.ttf", 8 * scale)
+                font_key = ImageFont.truetype("arialbd.ttf", 12 * scale)
             except:
                 font_large = ImageFont.load_default()
                 font_medium = ImageFont.load_default()
                 font_bold = ImageFont.load_default()
                 font_small = ImageFont.load_default()
                 font_tiny = ImageFont.load_default()
+                font_key = ImageFont.load_default()
         
         # Draw compact header
         self._draw_image_header(draw, width, height, scale, font_large, font_small)
+        
+        # Draw KEY area on first page
+        if self.design_config['include_key']:
+            self._draw_image_key(draw, width, height, scale, font_key, font_bold)
         
         # Draw questions
         self._draw_image_questions(draw, width, height, total_questions, scale, font_medium, font_bold)
@@ -454,6 +540,73 @@ class AnswerSheetDesigner:
         else:
             output_path = output_path.replace('.jpg', '.png')
             pil_image.save(output_path, 'PNG')
+    
+    def _draw_image_key(self, draw, width, height, scale, font_key, font_bold):
+        """Draw KEY area in top right corner on image"""
+        margins = self.design_config['margins']
+        
+        key_options = self.design_config['key_options']
+        key_bubble_radius = self.design_config['key_bubble_radius'] * scale
+        key_bubble_spacing = self.design_config['key_bubble_spacing'] * scale
+        key_section_width = self.design_config['key_section_width'] * scale
+        key_section_height = self.design_config['key_section_height'] * scale
+        marker_size = self.design_config['key_marker_size'] * scale
+        
+        # Position in top right corner
+        start_x = width - margins['right'] * scale - key_section_width
+        start_y = height - margins['top'] * scale - key_section_height + 20 * scale
+        
+        # Draw title
+        draw.text((start_x + 10 * scale + 10, start_y + 20 * scale), 
+                 "KEY", fill=(0, 0, 0), font= 0.8 * font_key)
+        
+        # Draw options with bubbles
+        for i, option in enumerate(key_options):
+            # Calculate position for this option
+            option_x = start_x + 20 * scale + i * key_bubble_spacing
+            option_y = start_y
+            
+            # Draw option label
+            draw.text((option_x - 5 * scale, option_y - 10 * scale), 
+                     f"({option})", fill=(0, 0, 0), font=font_bold)
+            
+            # Draw hollow bubble below the label
+            bubble_y = option_y - 20 * scale
+            draw.ellipse([
+                option_x - key_bubble_radius, bubble_y - key_bubble_radius,
+                option_x + key_bubble_radius, bubble_y + key_bubble_radius
+            ], outline=(0, 0, 0), fill=(255, 255, 255), width=1)
+        
+        # Calculate border box coordinates
+        box_x1 = start_x + 5 * scale
+        box_y1 = start_y - 25 * scale
+        box_x2 = start_x + key_section_width - 5 * scale
+        box_y2 = start_y + 30 * scale
+        
+        # Draw border around KEY section
+        draw.rectangle([box_x1, box_y1, box_x2, box_y2], 
+                      outline=(0, 0, 0), width=1)
+        
+        # Draw BLACK SQUARE MARKERS at four corners
+        # Top-left marker
+        draw.rectangle([box_x1 - marker_size/2, box_y2 - marker_size/2,
+                       box_x1 + marker_size/2, box_y2 + marker_size/2],
+                      fill=(0, 0, 0))
+        
+        # Top-right marker
+        draw.rectangle([box_x2 - marker_size/2, box_y2 - marker_size/2,
+                       box_x2 + marker_size/2, box_y2 + marker_size/2],
+                      fill=(0, 0, 0))
+        
+        # Bottom-left marker
+        draw.rectangle([box_x1 - marker_size/2, box_y1 - marker_size/2,
+                       box_x1 + marker_size/2, box_y1 + marker_size/2],
+                      fill=(0, 0, 0))
+        
+        # Bottom-right marker
+        draw.rectangle([box_x2 - marker_size/2, box_y1 - marker_size/2,
+                       box_x2 + marker_size/2, box_y1 + marker_size/2],
+                      fill=(0, 0, 0))
     
     def _draw_image_header(self, draw, width, height, scale, font_large, font_small):
         """Draw compact header on image"""
@@ -555,12 +708,12 @@ class AnswerSheetDesigner:
                       fill=(0, 0, 0))
     
     def _draw_image_questions(self, draw, width, height, total_questions, scale, font_medium, font_bold):
-        """Draw questions on image - NO compression for ID"""
+        """Draw questions on image - adjust for KEY area"""
         margins = self.design_config['margins']
         questions_per_page = self.design_config['questions_per_page']
         columns = self.design_config['columns']
         
-        # Full width for questions - NO space reserved for ID
+        # Full width for questions
         content_width = width - (margins['left'] + margins['right']) * scale
         content_height = height - (margins['top'] + margins['bottom']) * scale
         
@@ -581,8 +734,10 @@ class AnswerSheetDesigner:
             # Calculate questions per column
             questions_per_column = (questions_this_page + columns - 1) // columns
             
-            # Start questions
+            # Start questions - adjust for KEY area on first page
             start_y = height - margins['top'] * scale - self.design_config['header_height'] * scale
+            if self.design_config['include_key'] and page == 0:
+                start_y -= self.design_config['key_section_height'] * scale - 20 * scale
             
             for col in range(columns):
                 col_x = margins['left'] * scale + col * column_width
@@ -622,6 +777,11 @@ class AnswerSheetDesigner:
                         
                         draw.text((text_x, text_y), option, fill=(0, 0, 0), font=font_bold)
     
+    def _draw_image_quick_numbers(self, draw, width, height, scale, font_bold, font_small):
+        """Draw Quick Number Answer boxes on image"""
+        # Implementation similar to PDF version
+        pass
+    
     def preview_design(self, num_questions=10):
         """Create a small preview of the design"""
         temp_path = "preview.png"
@@ -653,8 +813,11 @@ if __name__ == "__main__":
         'bold': 'Lato-Bold.ttf'
     })
     
-    # Test with fewer questions
-    designer.create_answer_sheet(20, 'test_sheet_20.pdf', format='pdf', quick_number_boxes=5)
-    print("PDF created: test_sheet_20.pdf")
-
+    # Test with KEY area
+    designer.create_answer_sheet(20, 'test_sheet_with_key.pdf', format='pdf', quick_number_boxes=5)
+    print("PDF with KEY created: test_sheet_with_key.pdf")
     
+    # Test without KEY area
+    designer.set_config(include_key=False)
+    designer.create_answer_sheet(20, 'test_sheet_no_key.pdf', format='pdf', quick_number_boxes=5)
+    print("PDF without KEY created: test_sheet_no_key.pdf")

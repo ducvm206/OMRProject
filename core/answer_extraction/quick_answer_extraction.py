@@ -422,7 +422,7 @@ def main():
     """Example usage with debug mode"""
     scanner = QuickAnswerExtraction(
         model_path="core/models/cnn_model.h5",
-        template_path="template/test_sheet_20_complete_template.json",
+        template_path="files/template/answer_sheet_30mcq_6written_complete_template.json",
     )
 
     # Process the sheet with DEBUG MODE enabled
@@ -430,7 +430,7 @@ def main():
     print("Press ANY KEY in each window to continue to next question\n")
     
     result = scanner.process_sheet(
-        "test_sheet_20-1.png", 
+        "answer_sheet_1.png", 
         output_image_path="debug_annotated.jpg",
         debug_mode=True  # 🆕 Enable debug windows
     )

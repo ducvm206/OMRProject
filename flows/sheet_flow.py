@@ -34,6 +34,7 @@ class SheetGenerationFlow:
         self.num_mcq_questions = 40
         self.num_written_questions = 0
         self.include_student_id = True
+        self.include_key = True  # New: Include KEY area
         self.include_class_info = True
         self.include_timestamp = False
         self.output_directory = "blank_sheets"
@@ -46,7 +47,8 @@ class SheetGenerationFlow:
         self.current_template_id = None
     
     def configure_sheet(self, num_mcq_questions=None, num_written_questions=None, 
-                       include_student_id=None, include_class_info=None, include_timestamp=None):
+                       include_student_id=None, include_key=None,  # Added include_key
+                       include_class_info=None, include_timestamp=None):
         """
         Configure sheet parameters
         
@@ -54,6 +56,7 @@ class SheetGenerationFlow:
             num_mcq_questions: Number of MCQ questions
             num_written_questions: Number of written answer questions
             include_student_id: Include student ID field
+            include_key: Include KEY area (new parameter)
             include_class_info: Include class information
             include_timestamp: Include timestamp
             
@@ -74,6 +77,9 @@ class SheetGenerationFlow:
         
         if include_student_id is not None:
             self.include_student_id = bool(include_student_id)
+        
+        if include_key is not None:  # New: Handle include_key
+            self.include_key = bool(include_key)
         
         if include_class_info is not None:
             self.include_class_info = bool(include_class_info)
@@ -137,9 +143,10 @@ class SheetGenerationFlow:
             # Create designer
             designer = AnswerSheetDesigner()
             
-            # Configure (for student ID, class info, timestamp)
+            # Configure (for student ID, KEY, class info, timestamp)
             designer.set_config(
                 include_student_id=self.include_student_id,
+                include_key=self.include_key,  # Pass include_key to designer
                 include_class_info=self.include_class_info,
                 include_timestamp=self.include_timestamp
             )
@@ -159,10 +166,22 @@ class SheetGenerationFlow:
             if self.db_ops.is_connected():
                 try:
                     sheet_name = os.path.splitext(self.filename)[0]
+                    
+                    # Build notes with all configuration info
+                    notes_parts = [
+                        f"Generated with {self.num_mcq_questions} MCQ + {self.num_written_questions} written questions"
+                    ]
+                    if not self.include_student_id:
+                        notes_parts.append("No Student ID")
+                    if not self.include_key:
+                        notes_parts.append("No KEY area")
+                    if not self.include_class_info:
+                        notes_parts.append("No class info")
+                    
                     self.current_sheet_id = self.db_ops.save_sheet(
                         file_path=to_relative_path(output_path).replace("\\", "/"),
                         name=sheet_name,
-                        notes=f"Generated with {self.num_mcq_questions} MCQ + {self.num_written_questions} written questions"
+                        notes=" | ".join(notes_parts)
                     )
                     
                     if self.current_sheet_id:
@@ -253,14 +272,21 @@ class SheetGenerationFlow:
                     final_mcq = self.num_mcq_questions
                     final_written = self.num_written_questions
                     has_student_id = self._check_student_id_presence(template_data)
+                    has_key = self._check_key_presence(template_data)
+                    
+                    # FIXED: Store has_key in template_data metadata instead of separate DB column
+                    if 'metadata' not in template_data:
+                        template_data['metadata'] = {}
+                    template_data['metadata']['has_key'] = has_key
                     
                     template_name = f"Template_{os.path.splitext(self.filename)[0]}"
                     
+                    # FIXED: Removed has_key parameter - not in DB schema
                     self.current_template_id = self.db_ops.save_template(
                         sheet_id=self.current_sheet_id,
                         name=template_name,
                         json_path=to_relative_path(json_path).replace("\\", "/"),
-                        template_data=template_data,
+                        template_data=template_data,  # Contains has_key in metadata
                         multiple_choice_questions=final_mcq,
                         written_answer_questions=final_written,
                         has_student_id=has_student_id
@@ -319,6 +345,21 @@ class SheetGenerationFlow:
             return True
         return False
     
+    def _check_key_presence(self, template_data):
+        """Check if KEY area is present in template data"""
+        if any(key.startswith('page_') for key in template_data.keys()):
+            for page_key, page_data in template_data.items():
+                if page_key.startswith('page_'):
+                    if 'key_area' in page_data or 'key_bubbles' in page_data:
+                        return True
+                    # Also check for key markers or key section
+                    for field_key in page_data.keys():
+                        if 'key' in field_key.lower():
+                            return True
+        elif 'key_area' in template_data or 'key_bubbles' in template_data:
+            return True
+        return False
+    
     def generate_and_extract(self, show_visualization=True):
         success, error, pdf_path = self.generate_sheet()
         if not success:
@@ -335,6 +376,7 @@ class SheetGenerationFlow:
             'num_mcq_questions': self.num_mcq_questions,
             'num_written_questions': self.num_written_questions,
             'include_student_id': self.include_student_id,
+            'include_key': self.include_key,  # Added include_key
             'include_class_info': self.include_class_info,
             'include_timestamp': self.include_timestamp,
             'pdf_path': self.current_pdf_path,
@@ -347,6 +389,7 @@ class SheetGenerationFlow:
         self.num_mcq_questions = 40
         self.num_written_questions = 0
         self.include_student_id = True
+        self.include_key = True  # Reset include_key
         self.include_class_info = True
         self.include_timestamp = False
         self.output_directory = "blank_sheets"
@@ -357,9 +400,16 @@ class SheetGenerationFlow:
         self.current_template_id = None
 
 
-def generate_sheet_quick(num_mcq_questions=40, num_written_questions=0, output_dir="blank_sheets"):
+def generate_sheet_quick(num_mcq_questions=40, num_written_questions=0, 
+                         include_student_id=True, include_key=True,  # Added parameters
+                         output_dir="blank_sheets"):
     flow = SheetGenerationFlow()
-    success, error = flow.configure_sheet(num_mcq_questions=num_mcq_questions, num_written_questions=num_written_questions)
+    success, error = flow.configure_sheet(
+        num_mcq_questions=num_mcq_questions, 
+        num_written_questions=num_written_questions,
+        include_student_id=include_student_id,
+        include_key=include_key
+    )
     if not success:
         return False, error, None
     success, error = flow.set_output_location(output_dir)
@@ -368,11 +418,17 @@ def generate_sheet_quick(num_mcq_questions=40, num_written_questions=0, output_d
     return flow.generate_sheet()
 
 
-def generate_sheet_with_template(num_mcq_questions=40, num_written_questions=0, 
+def generate_sheet_with_template(num_mcq_questions=40, num_written_questions=0,
+                                 include_student_id=True, include_key=True,  # Added parameters
                                  output_dir="blank_sheets", template_dir="template", 
                                  show_viz=True):
     flow = SheetGenerationFlow()
-    success, error = flow.configure_sheet(num_mcq_questions=num_mcq_questions, num_written_questions=num_written_questions)
+    success, error = flow.configure_sheet(
+        num_mcq_questions=num_mcq_questions, 
+        num_written_questions=num_written_questions,
+        include_student_id=include_student_id,
+        include_key=include_key
+    )
     if not success:
         return False, error, None, None
     success, error = flow.set_output_location(output_dir)
