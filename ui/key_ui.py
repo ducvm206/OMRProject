@@ -5,7 +5,7 @@ Pure UI components for creating multiple answer keys (A-E) for an exam
 import os
 import sys
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog, StringVar, IntVar, NORMAL, DISABLED
+from tkinter import ttk, messagebox, simpledialog, StringVar, IntVar, NORMAL, DISABLED, BooleanVar
 
 # Add project root to path
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -33,8 +33,8 @@ class AnswerKeyUI:
         self.current_key_var = StringVar(value="A")
         self.status_var = StringVar(value="Ready")
         
-        # Entry widgets for current key
-        self.mcq_entries = []
+        # Entry widgets for current key - changed to store checkbox variables
+        self.mcq_checkboxes = []  # List of tuples: (q_num, {'A': var, 'B': var, 'C': var, 'D': var})
         self.written_entries = []
         
         # Colors
@@ -52,6 +52,7 @@ class AnswerKeyUI:
         }
         
         self.setup_window()
+        self.create_checkbox_images()  # Create custom checkbox images
         self.create_ui()
     
     def setup_window(self):
@@ -81,6 +82,33 @@ class AnswerKeyUI:
         style.configure("Accent.TButton", font=("Segoe UI", 10, "bold"))
         style.configure("Valid.TEntry", fieldbackground="#d4edda", relief="flat")
         style.configure("TEntry", relief="flat", padding=5)
+    
+    def create_checkbox_images(self):
+        """Create custom images for larger checkboxes"""
+        # Create blank images
+        self.unchecked_img = tk.PhotoImage(width=16, height=16)
+        self.checked_img = tk.PhotoImage(width=16, height=16)
+        
+        # Draw unchecked box (black border, MCQ_COLOR inside)
+        for x in range(16):
+            for y in range(16):
+                if x < 2 or x > 13 or y < 2 or y > 13:
+                    self.unchecked_img.put("#000000", (x, y))  # Black border
+                else:
+                    self.unchecked_img.put("#ffffff", (x, y))  # Inside color
+        
+        # Draw checked box (black border, white inside with check mark)
+        for x in range(16):
+            for y in range(16):
+                if x < 2 or x > 13 or y < 2 or y > 13:
+                    self.checked_img.put("#000000", (x, y))  # Black border
+                else:
+                    self.checked_img.put("#ffffff", (x, y))  # White inside
+        
+        # Draw check mark (X shape)
+        for i in range(4, 12):
+            self.checked_img.put("#000000", (i, i))       # \
+            self.checked_img.put("#000000", (i, 15 - i))  # /
     
     def create_ui(self):
         """Create main UI"""
@@ -440,7 +468,7 @@ class AnswerKeyUI:
                     messagebox.showerror("Error", f"Failed to set answers: {error}")
     
     def create_mcq_panel(self, parent, column):
-        """Create MCQ entry panel"""
+        """Create MCQ entry panel with custom checkbox images"""
         mcq_panel = tk.Frame(parent, bg=self.MCQ_COLOR, relief="flat")
         mcq_panel.grid(row=0, column=column, sticky="nsew", padx=(0, 5 if column == 0 else 0))
         
@@ -461,7 +489,7 @@ class AnswerKeyUI:
         tip_frame = tk.Frame(mcq_panel, bg=self.MCQ_COLOR)
         tip_frame.grid(row=1, column=0, sticky="ew", padx=15, pady=8)
         
-        tk.Label(tip_frame, text="💡 Enter A, B, C, or D. Multiple answers: A,B,C",
+        tk.Label(tip_frame, text="💡 Click letters to select correct answer(s) - multiple allowed",
                 font=("Segoe UI", 8), fg="#1565c0", bg=self.MCQ_COLOR).pack(anchor="w")
         
         # Scrollable area
@@ -486,36 +514,84 @@ class AnswerKeyUI:
         canvas.bind('<Configure>', on_canvas_configure)
         canvas.configure(yscrollcommand=scrollbar.set)
         
-        # Create MCQ entries
-        self.mcq_entries = []
-        max_per_col = 12
+        # Create MCQ checkboxes
+        self.mcq_checkboxes = []
         total = self.flow.mcq_count
-        columns = (total + max_per_col - 1) // max_per_col
+        columns = 2  # Always 2 columns
+        questions_per_col = (total + 1) // 2  # Left column gets extra if odd
         
         col_frames = []
         for col in range(columns):
             col_frame = tk.Frame(scrollable_frame, bg=self.MCQ_COLOR)
-            col_frame.pack(side=tk.LEFT, fill=tk.Y, padx=10)
+            col_frame.pack(side=tk.LEFT, fill=tk.Y, padx=15)
             col_frames.append(col_frame)
         
         q_index = 0
+        colors = {'A': '#4CAF50', 'B': '#2196F3', 'C': '#FF9800', 'D': '#F44336'}
+
         for col in range(columns):
-            for row in range(max_per_col):
+            col_frame = tk.Frame(scrollable_frame, bg=self.MCQ_COLOR)
+            col_frame.pack(side=tk.LEFT, fill=tk.Y, padx=15)
+            col_frames.append(col_frame)
+
+        q_index = 0
+        for col in range(columns):
+            # Calculate how many questions in this column
+            if col == 0:
+                # First column gets ceil(N/2)
+                questions_in_this_col = (total + 1) // 2
+            else:
+                # Second column gets floor(N/2)
+                questions_in_this_col = total // 2
+            
+            for row in range(questions_in_this_col):
                 q_num = q_index + 1
                 if q_num > total:
                     break
                 
-                row_frame = tk.Frame(col_frames[col], bg=self.MCQ_COLOR)
-                row_frame.pack(fill=tk.X, pady=4)
+                # Create frame for this question
+                q_frame = tk.Frame(col_frames[col], bg=self.MCQ_COLOR)
+                q_frame.pack(fill=tk.X, pady=6)
                 
-                tk.Label(row_frame, text=f"Q{q_num}.", width=5, anchor="e",
-                        font=("Segoe UI", 10, "bold"), bg=self.MCQ_COLOR, fg="#1565c0").pack(side=tk.LEFT, padx=(0, 6))
+                # Question number label
+                tk.Label(q_frame, text=f"Q{q_num}.", width=5, anchor="e",
+                        font=("Segoe UI", 11, "bold"), bg=self.MCQ_COLOR, fg="#1565c0").pack(side=tk.LEFT, padx=(0, 8))
                 
-                entry = ttk.Entry(row_frame, width=10, font=("Segoe UI", 11), justify="center")
-                entry.pack(side=tk.LEFT)
-                self.mcq_entries.append((q_num, entry))
+                # Create checkbox variables for A, B, C, D
+                checkbox_vars = {
+                    'A': BooleanVar(value=False),
+                    'B': BooleanVar(value=False),
+                    'C': BooleanVar(value=False),
+                    'D': BooleanVar(value=False)
+                }
                 
-                entry.bind('<KeyRelease>', lambda e, q=q_num, ent=entry: self.on_mcq_answer_change(q, ent))
+                # Create checkboxes
+                cb_frame = tk.Frame(q_frame, bg=self.MCQ_COLOR)
+                cb_frame.pack(side=tk.LEFT, padx=5)
+                
+                for letter in ['A', 'B', 'C', 'D']:
+                    # Create custom checkbox with images
+                    checkbox = tk.Checkbutton(cb_frame, variable=checkbox_vars[letter],
+                                            bg=self.MCQ_COLOR,
+                                            indicatoron=False,  # Use images instead of default indicator
+                                            image=self.unchecked_img,
+                                            selectimage=self.checked_img,
+                                            compound="right",  # Put text to the right of image
+                                            activebackground=self.MCQ_COLOR,
+                                            borderwidth=0,
+                                            highlightthickness=0,
+                                            command=lambda q=q_num, cv=checkbox_vars: self.on_mcq_checkbox_change(q, cv))
+                    checkbox.config(text=letter, 
+                                font=("Segoe UI", 12, "bold"), 
+                                fg=colors[letter],
+                                anchor="w")
+                    checkbox.pack(side=tk.LEFT, padx=(0, 8))
+                    
+                    # Store checkbox widget for later updates
+                    checkbox_vars[letter].widget = checkbox
+                
+                # Store checkbox variables for this question
+                self.mcq_checkboxes.append((q_num, checkbox_vars))
                 
                 q_index += 1
         
@@ -591,23 +667,25 @@ class AnswerKeyUI:
         canvas.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
     
-    def on_mcq_answer_change(self, question_num, entry):
-        """Handle MCQ answer change"""
-        answer_input = entry.get().strip().upper()
+    def on_mcq_checkbox_change(self, question_num, checkbox_vars):
+        """Handle MCQ checkbox change"""
+        # Get selected answers
+        selected_answers = [letter for letter, var in checkbox_vars.items() if var.get()]
         
-        if not answer_input:
-            # Get current key object
+        if not selected_answers:
+            # Clear answer if no checkboxes are selected
             current_key = self.flow.answer_keys[self.flow.current_key_letter]
             if str(question_num) in current_key.mcq_answers:
                 del current_key.mcq_answers[str(question_num)]
-            entry.config(style="TEntry")
         else:
+            # Convert selected answers to comma-separated string
+            answer_input = ','.join(sorted(selected_answers))
             success, error = self.flow.set_mcq_answer(question_num, answer_input)
             
-            if success:
-                entry.config(style="Valid.TEntry")
-            else:
-                entry.config(style="TEntry")
+            if not success:
+                # Revert checkbox state
+                for letter, var in checkbox_vars.items():
+                    var.set(letter in selected_answers)
         
         self.update_progress()
     
@@ -636,14 +714,11 @@ class AnswerKeyUI:
         # Get current key object
         current_key = self.flow.answer_keys[self.flow.current_key_letter]
         
-        # Reload MCQ entries
-        for q_num, entry in self.mcq_entries:
-            entry.delete(0, tk.END)
-            if str(q_num) in current_key.mcq_answers:
-                entry.insert(0, ','.join(current_key.mcq_answers[str(q_num)]))
-                entry.config(style="Valid.TEntry")
-            else:
-                entry.config(style="TEntry")
+        # Reload MCQ checkboxes
+        for q_num, checkbox_vars in self.mcq_checkboxes:
+            answers = current_key.mcq_answers.get(str(q_num), [])
+            for letter, var in checkbox_vars.items():
+                var.set(letter in answers)
         
         # Reload written entries
         for q_num, entry in self.written_entries:
