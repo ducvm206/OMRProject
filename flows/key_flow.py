@@ -2,13 +2,16 @@
 Answer Key Creation Flow - Multiple Keys Support
 Business logic for creating answer keys with support for multiple keys (A-E)
 Each exam can have up to 5 different answer keys
+Now with extraction from filled answer sheets
 """
 import os
 import sys
 import json
 import datetime
 import re
-import random  # Added for random answer generation
+import random
+import cv2
+import numpy as np
 
 # Add project root to path
 PROJECT_BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -24,12 +27,25 @@ from utils.file_utils import (
     save_file_dialog, 
     to_relative_path, 
     to_absolute_path,
-    ensure_directory
+    ensure_directory,
+    get_project_root
 )
 from utils.validation import (
     validate_template_json, 
     validate_filename
 )
+
+# Try to import answer extraction processor
+try:
+    from core.answer_extraction.answer_extraction import AnswerSheetProcessor
+    EXTRACTION_AVAILABLE = True
+except ImportError:
+    try:
+        from core.answer_extraction import AnswerSheetProcessor
+        EXTRACTION_AVAILABLE = True
+    except ImportError:
+        EXTRACTION_AVAILABLE = False
+        print("[WARNING] Answer extraction module not available. Key extraction from sheets will be disabled.")
 
 
 class AnswerKey:
@@ -177,6 +193,7 @@ class AnswerKeyFlow:
     def __init__(self):
         """Initialize the flow"""
         self.db_ops = get_db_operations()
+        self.extraction_processor = None
         
         # Exam configuration
         self.exam_name = None
@@ -193,6 +210,10 @@ class AnswerKeyFlow:
         # Answer keys: {key_letter: AnswerKey}
         self.answer_keys = {}  # {'A': AnswerKey, 'B': AnswerKey, ...}
         self.current_key_letter = None
+        
+        # Initialize extraction processor if available
+        if EXTRACTION_AVAILABLE:
+            print("[FLOW] Answer extraction module loaded successfully")
     
     def configure_exam(self, exam_name, num_keys, mcq_max_points, written_max_points):
         """
@@ -417,6 +438,405 @@ class AnswerKeyFlow:
         
         return True, None, self.get_all_keys_progress()
     
+    def extract_key_from_filled_sheet(self, sheet_image_path, target_key_letter, 
+                                      threshold_percent=50, debug=False, suppress_debug_windows=True):
+        """
+        Extract answers from a filled answer sheet to create a key
+        
+        Args:
+            sheet_image_path: Path to filled answer sheet (master sheet for a key)
+            target_key_letter: Which key letter to populate ('A', 'B', 'C', 'D', or 'E')
+            threshold_percent: Bubble detection threshold (0-100)
+            debug: Show extraction visualizations
+            suppress_debug_windows: If True, suppress OpenCV debug windows to avoid errors
+            
+        Returns:
+            Tuple of (success, error_message, extraction_result)
+        """
+        if not EXTRACTION_AVAILABLE:
+            return False, "Answer extraction module not available", None
+        
+        # Validate inputs
+        if target_key_letter.upper() not in self.answer_keys:
+            return False, f"Invalid target key letter: {target_key_letter}", None
+        
+        if not os.path.exists(sheet_image_path):
+            return False, f"Sheet image not found: {sheet_image_path}", None
+        
+        if not self.current_template:
+            return False, "No template loaded", None
+        
+        print(f"\n{'='*70}")
+        print(f"EXTRACTING KEY {target_key_letter} FROM FILLED SHEET")
+        print(f"{'='*70}")
+        print(f"Sheet: {os.path.basename(sheet_image_path)}")
+        print(f"Target key: {target_key_letter}")
+        print(f"Template: {self.current_template}")
+        
+        try:
+            # Initialize extraction processor WITH CNN model
+            template_abs_path = to_absolute_path(self.current_template)
+            
+            # Find CNN model path
+            cnn_model_path = None
+            possible_paths = [
+                os.path.join(get_project_root(), 'core', 'models', 'cnn_model.h5'),
+                os.path.join(get_project_root(), 'files', 'core', 'models', 'cnn_model.h5'),
+                'core/models/cnn_model.h5',
+                'files/core/models/cnn_model.h5'
+            ]
+            
+            for path in possible_paths:
+                if os.path.exists(path):
+                    cnn_model_path = path
+                    print(f"[EXTRACTION] Found CNN model at: {cnn_model_path}")
+                    break
+            
+            if not cnn_model_path:
+                print("[EXTRACTION] WARNING: CNN model not found at any expected location")
+                print("[EXTRACTION] Looking for cnn_model.h5 in:")
+                for path in possible_paths:
+                    print(f"  - {path}")
+            
+            # Initialize processor with suppress_debug_windows parameter
+            print(f"[EXTRACTION] Initializing AnswerSheetProcessor (suppress_debug_windows={suppress_debug_windows})")
+            self.extraction_processor = AnswerSheetProcessor(
+                template_path=template_abs_path,
+                cnn_model_path=cnn_model_path  # Can be None if not found
+            )
+            
+            # Process the sheet to extract answers
+            result = self.extraction_processor.process_sheet(
+                image_path=sheet_image_path,
+                threshold_percent=threshold_percent,
+                debug=debug,
+                extract_id=False,  # Don't extract student ID
+                extract_mc=True,   # Extract MCQ answers
+                extract_quick=True, # Extract written answers
+                extract_key=False  # Don't extract key region (we're creating one)
+            )
+            
+            if not result:
+                return False, "Extraction returned no results", None
+            
+            print(f"\n[EXTRACTION] Extraction completed. Processing results...")
+            print(f"  MCQ Answers present: {'multiple_choice_answers' in result}")
+            print(f"  Quick Answers present: {'quick_answers' in result}")
+            
+            # Get the target key object
+            target_key = self.answer_keys[target_key_letter.upper()]
+            
+            # Process MCQ answers from extraction
+            mc_extracted = 0
+            mc_errors = []
+            
+            if result.get('multiple_choice_answers'):
+                mc_data = result['multiple_choice_answers'].get('answers', {})
+                print(f"  Found {len(mc_data)} MCQ entries")
+                
+                for q_num_str, q_data in mc_data.items():
+                    try:
+                        q_num = int(q_num_str)
+                        selected_answers = q_data.get('selected_answers', [])
+                        
+                        # Handle empty or None answers
+                        if selected_answers is None:
+                            selected_answers = []
+                        elif isinstance(selected_answers, str):
+                            selected_answers = [selected_answers] if selected_answers.strip() else []
+                        
+                        if selected_answers and selected_answers != ['']:
+                            success, error = target_key.set_mcq_answer(q_num, selected_answers)
+                            if success:
+                                mc_extracted += 1
+                                print(f"    Q{q_num}: Extracted answers {selected_answers}")
+                            else:
+                                mc_errors.append(f"Q{q_num}: {error}")
+                    except (ValueError, KeyError) as e:
+                        mc_errors.append(f"Q{q_num_str}: Parse error - {str(e)}")
+            else:
+                print("  No MCQ data found in extraction results")
+            
+            # Process written answers from extraction
+            # Process written answers from extraction
+            written_extracted = 0
+            written_errors = []
+
+            # Check if quick answers were extracted
+            if result.get('quick_answers'):
+                qa_data = result['quick_answers']
+                print(f"  Quick answers data structure: {type(qa_data)}")
+                print(f"  Quick answers keys: {list(qa_data.keys()) if isinstance(qa_data, dict) else 'N/A'}")
+                
+                # Handle different possible structures
+                if isinstance(qa_data, dict):
+                    # Check for 'quick_answers' list
+                    if 'quick_answers' in qa_data:
+                        qa_list = qa_data['quick_answers']
+                        print(f"  Found quick_answers list with {len(qa_list)} entries")
+                        
+                        for qa in qa_list:
+                            try:
+                                q_num = qa.get('question_number')
+                                answer = qa.get('answer')
+                                confidence = qa.get('confidence', 0)
+                                
+                                # IMPORTANT FIX: Convert quick answer numbering (1-5) to written answer numbering (31-35)
+                                # The extraction returns 1-5 for the 5 quick answer boxes
+                                # But in the answer key, written answers should be 31-35 (after 30 MCQ questions)
+                                if self.mcq_count > 0:
+                                    actual_q_num = q_num + self.mcq_count
+                                    print(f"    Processing Q{q_num} (adjusted to Q{actual_q_num}): answer={answer}, confidence={confidence}")
+                                else:
+                                    actual_q_num = q_num
+                                    print(f"    Processing Q{q_num}: answer={answer}, confidence={confidence}")
+                                
+                                if answer is not None and str(answer).strip() and str(answer).lower() != 'none':
+                                    try:
+                                        numeric_answer = float(answer)
+                                        # Use the adjusted question number
+                                        success, error = target_key.set_written_answer(actual_q_num, numeric_answer)
+                                        if success:
+                                            written_extracted += 1
+                                            print(f"      Q{actual_q_num}: Extracted answer '{answer}' (confidence: {confidence:.1f}%)")
+                                        else:
+                                            written_errors.append(f"Q{actual_q_num}: {error}")
+                                    except (ValueError, TypeError) as ve:
+                                        written_errors.append(f"Q{actual_q_num}: Invalid numeric answer '{answer}' - {ve}")
+                            except (KeyError, AttributeError) as e:
+                                written_errors.append(f"Parse error: {str(e)}")
+                    else:
+                        # qa_data might already be the list
+                        if isinstance(qa_data.get('quick_answers', []), list):
+                            qa_list = qa_data['quick_answers']
+                            print(f"  Found quick_answers list via get with {len(qa_list)} entries")
+                            
+                            for qa in qa_list:
+                                try:
+                                    q_num = qa.get('question_number')
+                                    answer = qa.get('answer')
+                                    
+                                    if answer is not None and str(answer).strip():
+                                        try:
+                                            numeric_answer = float(answer)
+                                            success, error = target_key.set_written_answer(q_num, numeric_answer)
+                                            if success:
+                                                written_extracted += 1
+                                                print(f"      Q{q_num}: Extracted answer '{answer}'")
+                                            else:
+                                                written_errors.append(f"Q{q_num}: {error}")
+                                        except (ValueError, TypeError):
+                                            written_errors.append(f"Q{q_num}: Invalid numeric answer '{answer}'")
+                                except (KeyError, AttributeError) as e:
+                                    written_errors.append(f"Parse error: {str(e)}")
+                        else:
+                            print("  Could not find quick_answers list in the data structure")
+                            written_errors.append("Quick answers data structure not recognized")
+                else:
+                    print(f"  Quick answers data is not a dictionary: {type(qa_data)}")
+                    written_errors.append(f"Quick answers data has unexpected type: {type(qa_data)}")
+            else:
+                print("  No quick_answers section in extraction results")
+                # Check if there might be quick answers under a different key
+                for key in result.keys():
+                    if 'quick' in key.lower() or 'written' in key.lower():
+                        print(f"  Found potential quick answers key: {key}")
+                        if isinstance(result[key], list) and len(result[key]) > 0:
+                            print(f"    Has {len(result[key])} entries")
+            
+            # Try alternative approach: look for any list that might contain quick answers
+            if written_extracted == 0:
+                print("\n[EXTRACTION] Trying alternative search for quick answers...")
+                for key, value in result.items():
+                    if isinstance(value, list) and len(value) > 0:
+                        print(f"  Checking list at key '{key}' with {len(value)} items")
+                        # Check if first item has question_number and answer fields
+                        if value and isinstance(value[0], dict):
+                            first_item = value[0]
+                            if 'question_number' in first_item and 'answer' in first_item:
+                                print(f"    Found potential quick answers in '{key}'")
+                                for item in value:
+                                    try:
+                                        q_num = item.get('question_number')
+                                        answer = item.get('answer')
+                                        if q_num and answer is not None:
+                                            try:
+                                                # Adjust question number here too
+                                                q_num_int = int(q_num)
+                                                if self.mcq_count > 0:
+                                                    actual_q_num = q_num_int + self.mcq_count
+                                                else:
+                                                    actual_q_num = q_num_int
+                                                
+                                                numeric_answer = float(answer)
+                                                success, error = target_key.set_written_answer(actual_q_num, numeric_answer)
+                                                if success:
+                                                    written_extracted += 1
+                                                    print(f"      Q{actual_q_num}: Extracted answer '{answer}'")
+                                            except (ValueError, TypeError):
+                                                pass
+                                    except:
+                                        pass
+            
+            # Build extraction summary
+            extraction_summary = {
+                'sheet_image': sheet_image_path,
+                'target_key': target_key_letter,
+                'extraction_timestamp': datetime.datetime.now().isoformat(),
+                'mcq_results': {
+                    'extracted': mc_extracted,
+                    'total_expected': self.mcq_count,
+                    'errors': mc_errors,
+                    'success_rate': (mc_extracted / self.mcq_count * 100) if self.mcq_count > 0 else 0
+                },
+                'written_results': {
+                    'extracted': written_extracted,
+                    'total_expected': self.written_count,
+                    'errors': written_errors,
+                    'success_rate': (written_extracted / self.written_count * 100) if self.written_count > 0 else 0,
+                    'missing_questions': [str(i) for i in range(self.mcq_count + 1, 
+                                                               self.mcq_count + self.written_count + 1)
+                                         if str(i) not in target_key.written_answers]
+                },
+                'original_extraction_result': {
+                    'metadata': result.get('metadata', {}),
+                    'extraction_summary': result.get('extraction_summary', {}),
+                    'has_mcq': 'multiple_choice_answers' in result,
+                    'has_quick': 'quick_answers' in result,
+                    'result_keys': list(result.keys())
+                }
+            }
+            
+            # Print extraction summary
+            print(f"\n{'='*70}")
+            print(f"EXTRACTION SUMMARY FOR KEY {target_key_letter}")
+            print(f"{'='*70}")
+            print(f"MCQ Answers: {mc_extracted}/{self.mcq_count} extracted")
+            print(f"Written Answers: {written_extracted}/{self.written_count} extracted")
+            
+            if mc_errors:
+                print(f"\nMCQ Errors ({len(mc_errors)}):")
+                for err in mc_errors[:5]:  # Show first 5 errors
+                    print(f"  - {err}")
+                if len(mc_errors) > 5:
+                    print(f"  ... and {len(mc_errors) - 5} more")
+            
+            if written_errors:
+                print(f"\nWritten Errors ({len(written_errors)}):")
+                for err in written_errors:
+                    print(f"  - {err}")
+            
+            # Show key progress after extraction
+            key_progress = target_key.get_progress()
+            print(f"\nKey {target_key_letter} Progress:")
+            print(f"  MCQ: {key_progress['mcq']['answered']}/{key_progress['mcq']['total']} ({key_progress['mcq']['percentage']:.1f}%)")
+            print(f"  Written: {key_progress['written']['answered']}/{key_progress['written']['total']} ({key_progress['written']['percentage']:.1f}%)")
+            print(f"  Overall: {key_progress['overall']['answered']}/{key_progress['overall']['total']} ({key_progress['overall']['percentage']:.1f}%)")
+            
+            # Check if extraction was successful
+            success = mc_extracted > 0  # At least MCQ extracted
+            if success:
+                print(f"\n{'='*70}")
+                print(f"[SUCCESS] Key {target_key_letter} extracted")
+                print(f"{'='*70}")
+            else:
+                print(f"\n{'='*70}")
+                print(f"[WARNING] Key {target_key_letter} partially extracted")
+                print(f"{'='*70}")
+            
+            return success, None, extraction_summary
+            
+        except Exception as e:
+            error_msg = f"Extraction failed: {str(e)}"
+            print(f"\n{'='*70}")
+            print(f"[ERROR] Extraction failed")
+            print(f"{'='*70}")
+            print(error_msg)
+            import traceback
+            traceback.print_exc()
+            return False, error_msg, None
+    
+    def extract_all_keys_from_sheets(self, sheet_images_dict, threshold_percent=50, debug=False, suppress_debug_windows=True):
+        """
+        Extract multiple keys from different filled sheets
+        
+        Args:
+            sheet_images_dict: Dictionary of {key_letter: sheet_image_path}
+            threshold_percent: Bubble detection threshold
+            debug: Show extraction visualizations
+            suppress_debug_windows: If True, suppress OpenCV debug windows
+            
+        Returns:
+            Tuple of (success, error_message, extraction_results)
+        """
+        if not EXTRACTION_AVAILABLE:
+            return False, "Answer extraction module not available", None
+        
+        if not sheet_images_dict:
+            return False, "No sheet images provided", None
+        
+        all_results = {}
+        all_errors = []
+        
+        print(f"\n{'='*70}")
+        print(f"EXTRACTING ALL KEYS FROM FILLED SHEETS")
+        print(f"{'='*70}")
+        
+        for key_letter, sheet_path in sheet_images_dict.items():
+            print(f"\nProcessing key {key_letter} from: {os.path.basename(sheet_path)}")
+            
+            if key_letter.upper() not in self.answer_keys:
+                error = f"Invalid key letter in sheet dict: {key_letter}"
+                all_errors.append(error)
+                print(f"  [ERROR] {error}")
+                continue
+            
+            if not os.path.exists(sheet_path):
+                error = f"Sheet not found: {sheet_path}"
+                all_errors.append(error)
+                print(f"  [ERROR] {error}")
+                continue
+            
+            success, error, result = self.extract_key_from_filled_sheet(
+                sheet_image_path=sheet_path,
+                target_key_letter=key_letter,
+                threshold_percent=threshold_percent,
+                debug=debug,
+                suppress_debug_windows=suppress_debug_windows
+            )
+            
+            if success and result:
+                all_results[key_letter] = result
+                print(f"  [SUCCESS] Key {key_letter} extracted")
+            else:
+                if error:
+                    error_msg = f"Key {key_letter}: {error}"
+                else:
+                    error_msg = f"Key {key_letter}: Extraction failed"
+                all_errors.append(error_msg)
+                print(f"  [FAILED] {error_msg}")
+        
+        # Overall summary
+        print(f"\n{'='*70}")
+        print(f"BATCH EXTRACTION COMPLETE")
+        print(f"{'='*70}")
+        print(f"Keys successfully extracted: {len(all_results)}/{len(sheet_images_dict)}")
+        print(f"Errors: {len(all_errors)}")
+        
+        if all_errors:
+            print(f"\nExtraction Errors:")
+            for error in all_errors[:10]:  # Show first 10 errors
+                print(f"  - {error}")
+            if len(all_errors) > 10:
+                print(f"  ... and {len(all_errors) - 10} more")
+        
+        if all_results:
+            success_flag = len(all_results) > 0
+            error_msg = None if not all_errors else "Some extractions failed"
+            return success_flag, error_msg, all_results
+        else:
+            return False, "All extractions failed", None
+    
     def save_exam_answer_keys(self, filename=None, save_directory='files/answer_keys'):
         """
         Save all answer keys for the exam to a single JSON file and database
@@ -434,11 +854,6 @@ class AnswerKeyFlow:
         
         if not self.exam_name:
             return False, "Exam not configured", None
-        
-        # Validate all keys are complete
-        valid, error, progress = self.validate_all_keys()
-        if not valid:
-            return False, error, None
         
         # Generate filename if not provided
         if not filename:
@@ -466,7 +881,7 @@ class AnswerKeyFlow:
             'metadata': {
                 'exam_name': self.exam_name,
                 'created_at': datetime.datetime.now().isoformat(),
-                'creation_method': 'manual',
+                'creation_method': 'extraction',
                 'template_used': self.current_template,
                 'total_keys': self.num_keys,
                 'keys_present': list(self.answer_keys.keys()),
@@ -474,7 +889,8 @@ class AnswerKeyFlow:
                 'mcq_count': self.mcq_count,
                 'mcq_max_points': self.mcq_max_points,
                 'written_count': self.written_count,
-                'written_max_points': self.written_max_points
+                'written_max_points': self.written_max_points,
+                'extraction_complete': self.is_extraction_complete()
             },
             'keys': {}
         }
@@ -487,8 +903,19 @@ class AnswerKeyFlow:
         try:
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(exam_data, f, indent=2, ensure_ascii=False)
+            print(f"\n{'='*70}")
+            print(f"SAVING COMPLETE EXAM FILE")
+            print(f"{'='*70}")
+            print(f"✓ File saved to: {file_path}")
+            print(f"✓ Exam: {self.exam_name}")
+            print(f"✓ Keys: {', '.join(self.answer_keys.keys())}")
+            print(f"✓ MCQ: {self.mcq_count} questions")
+            print(f"✓ Written: {self.written_count} questions")
+            print(f"✓ Total: {self.mcq_count + self.written_count} questions")
         except Exception as e:
-            return False, f"Failed to save file: {str(e)}", None
+            error_msg = f"Failed to save file: {str(e)}"
+            print(f"\n✗ File save failed: {error_msg}")
+            return False, error_msg, None
         
         result = {
             'file_path': file_path,
@@ -496,43 +923,85 @@ class AnswerKeyFlow:
             'key_ids': {}
         }
         
-        # FIXED: Save to database using import_complete_exam
-        if self.db_ops.is_connected():
+        # Try to save to database
+        if self.db_ops and self.db_ops.is_connected():
             try:
                 # Get template info from database
                 template_info = self.db_ops.get_template_by_json_path(self.current_template)
                 
                 if not template_info:
-                    print(f"[FLOW] Warning: Template not found in database: {self.current_template}")
-                    print(f"[FLOW] Complete exam file saved to: {file_path}")
-                    print(f"[FLOW] Use import_complete_exam to add to database later")
+                    print(f"\n⚠ Template not found in database: {self.current_template}")
+                    print(f"⚠ Complete exam file saved locally only")
                     return True, None, result
                 
-                # Use import_complete_exam to split and save individual keys
-                import_result = self.db_ops.import_complete_exam(
-                    exam_file_path=file_path,
-                    template_id=template_info['id'],
-                    output_dir=save_directory
+                # 1. First save the exam record
+                max_score = self.mcq_max_points + self.written_max_points
+                exam_id = self.db_ops.save_exam(
+                    name=self.exam_name,
+                    description=f"Extracted from template: {self.current_template}",
+                    max_score=max_score
                 )
                 
-                if import_result:
-                    exam_id, key_ids = import_result
-                    result['exam_id'] = exam_id
-                    result['key_ids'] = key_ids
-                    print(f"[FLOW] Exam saved to database (Exam ID: {exam_id})")
-                    print(f"[FLOW] Individual keys saved: {list(key_ids.keys())}")
-                else:
-                    print(f"[FLOW] Warning: Failed to save to database")
-                    print(f"[FLOW] Complete exam file saved to: {file_path}")
-                        
+                if not exam_id:
+                    print(f"\n⚠ Failed to save exam to database")
+                    print(f"⚠ Complete exam file saved to: {file_path}")
+                    return True, None, result
+                
+                result['exam_id'] = exam_id
+                
+                # 2. Save each key individually to the database
+                for letter, key in self.answer_keys.items():
+                    # Create individual key file path
+                    key_filename = f"{self.exam_name}_{letter}.json"
+                    key_file_path = os.path.join(save_directory, key_filename)
+                    
+                    # Save individual key data
+                    key_data = {
+                        'metadata': {
+                            'exam_name': self.exam_name,
+                            'key_letter': letter,
+                            'created_at': datetime.datetime.now().isoformat(),
+                            'template_used': self.current_template
+                        },
+                        'answers': key.to_dict()
+                    }
+                    
+                    try:
+                        with open(key_file_path, 'w', encoding='utf-8') as f:
+                            json.dump(key_data, f, indent=2, ensure_ascii=False)
+                    except Exception as e:
+                        print(f"⚠ Failed to save individual key file for {letter}: {e}")
+                        continue
+                    
+                    # Save to database
+                    key_id = self.db_ops.save_answer_key(
+                        template_id=template_info['id'],
+                        exam_id=exam_id,
+                        name=f"{self.exam_name} - Key {letter}",
+                        label=letter,
+                        json_path=os.path.relpath(key_file_path, get_project_root()),
+                        key_data=key.to_dict(),
+                        created_by='extraction'
+                    )
+                    
+                    if key_id:
+                        result['key_ids'][letter] = key_id
+                        print(f"  ✓ Key {letter} saved to database (ID: {key_id})")
+                    else:
+                        print(f"  ✗ Failed to save Key {letter} to database")
+                
+                print(f"\n✓ All keys saved to database (Exam ID: {exam_id})")
+                print(f"✓ Individual keys saved: {list(result['key_ids'].keys())}")
+                    
             except Exception as e:
-                print(f"[FLOW] Database save warning: {e}")
+                print(f"\n⚠ Database save warning: {e}")
                 import traceback
                 traceback.print_exc()
+                # Don't return False here - file was saved successfully
         else:
-            print(f"[FLOW] Database not connected - file saved locally only")
+            print(f"\n⚠ Database not connected - file saved locally only")
         
-        return True, None, result  # result contains {'file_path': str, 'exam_id': int, 'key_ids': dict}
+        return True, None, result
     
     def get_exam_data(self):
         """Get current exam configuration and answers"""
@@ -546,8 +1015,99 @@ class AnswerKeyFlow:
             'written_max_points': self.written_max_points,
             'current_key': self.current_key_letter,
             'keys_data': {letter: key.to_dict() for letter, key in self.answer_keys.items()},
-            'progress': self.get_all_keys_progress()
+            'progress': self.get_all_keys_progress(),
+            'is_extraction_complete': self.is_extraction_complete()
         }
+    
+    def clear_key(self, key_letter=None):
+        """
+        Clear answers for a specific key or current key
+        
+        Args:
+            key_letter: Specific key to clear (None for current key)
+            
+        Returns:
+            Tuple of (success, error_message)
+        """
+        if key_letter is None:
+            if not self.current_key_letter:
+                return False, "No key selected"
+            key_obj = self.answer_keys[self.current_key_letter]
+        else:
+            key_letter = key_letter.upper()
+            if key_letter not in self.answer_keys:
+                return False, f"Key '{key_letter}' not found"
+            key_obj = self.answer_keys[key_letter]
+        
+        # Clear answers
+        key_obj.mcq_answers.clear()
+        key_obj.written_answers.clear()
+        
+        return True, None
+    
+    def check_cnn_model_available(self):
+        """
+        Check if CNN model is available for handwritten digit recognition
+        
+        Returns:
+            Tuple of (is_available, model_path_or_error_message)
+        """
+        possible_paths = [
+            os.path.join(get_project_root(), 'core', 'models', 'cnn_model.h5'),
+            os.path.join(get_project_root(), 'files', 'core', 'models', 'cnn_model.h5'),
+            'core/models/cnn_model.h5',
+            'files/core/models/cnn_model.h5'
+        ]
+        
+        for path in possible_paths:
+            if os.path.exists(path):
+                return True, path
+        
+        return False, "CNN model not found at any expected location:\n" + "\n".join(f"  - {p}" for p in possible_paths)
+    
+    def is_extraction_complete(self):
+        """Check if extraction is complete for all keys"""
+        if not self.answer_keys:
+            return False
+        
+        for key in self.answer_keys.values():
+            progress = key.get_progress()
+            if not progress['overall']['is_complete']:
+                return False
+        
+        return True
+    
+    def manual_set_written_answer(self, key_letter, question_num, answer):
+        """
+        Manually set a written answer for a specific key
+        Useful when automatic extraction fails
+        
+        Args:
+            key_letter: Key letter ('A', 'B', etc.)
+            question_num: Question number
+            answer: Numeric answer
+            
+        Returns:
+            Tuple of (success, error_message)
+        """
+        if key_letter.upper() not in self.answer_keys:
+            return False, f"Key '{key_letter}' not found"
+        
+        return self.answer_keys[key_letter.upper()].set_written_answer(question_num, answer)
+    
+    def get_missing_written_answers(self):
+        """
+        Get a list of missing written answers across all keys
+        
+        Returns:
+            Dictionary of {key_letter: [missing_question_numbers]}
+        """
+        missing = {}
+        for letter, key in self.answer_keys.items():
+            progress = key.get_progress()
+            if progress['written']['missing']:
+                missing[letter] = progress['written']['missing']
+        return missing
 
 
 def create_answer_key_manual(template_path, mcq_max_points, written_max_points,
@@ -560,18 +1120,132 @@ def create_answer_key_manual(template_path, mcq_max_points, written_max_points,
     if not success:
         return False, error, None
     
-    success, error = flow.set_question_counts(mcq_max_points, written_max_points)
+    success, error = flow.configure_exam(exam_name or "Manual Exam", 1, mcq_max_points, written_max_points)
     if not success:
         return False, error, None
     
     if mcq_answers_dict:
-        success, error = flow.set_multiple_mcq_answers(mcq_answers_dict)
-        if not success:
-            return False, error, None
+        for q_num, answers in mcq_answers_dict.items():
+            flow.set_mcq_answer(q_num, answers)
     
     if written_answers_dict:
-        success, error = flow.set_multiple_written_answers(written_answers_dict)
-        if not success:
-            return False, error, None
+        for q_num, answer in written_answers_dict.items():
+            flow.set_written_answer(q_num, answer)
     
-    return flow.save_answer_key(filename=output_filename, exam_name=exam_name)
+    return flow.save_exam_answer_keys(filename=output_filename)
+
+
+# Example usage function
+def example_extract_key_from_sheet():
+    """Example of how to use the key extraction functionality"""
+    flow = AnswerKeyFlow()
+    
+    # 1. Load template
+    template_path = "template/answer_sheet_30mcq_5written_complete_template.json"
+    success, error, template_info = flow.load_template(template_path)
+    if not success:
+        print(f"Error loading template: {error}")
+        return
+    
+    print(f"Template loaded: {template_info['name']}")
+    print(f"MCQ questions available: {template_info['mcq_questions_available']}")
+    print(f"Written questions available: {template_info['written_questions_available']}")
+    
+    # 2. Configure exam
+    success, error = flow.configure_exam(
+        exam_name="Exam 1",
+        num_keys=5,
+        mcq_max_points=5,
+        written_max_points=5
+    )
+    
+    if not success:
+        print(f"Error configuring exam: {error}")
+        return
+    
+    print(f"\nExam configured: {flow.exam_name}")
+    print(f"Keys to create: {flow.num_keys}")
+    
+    # 3. Check CNN model availability
+    cnn_available, cnn_path_or_error = flow.check_cnn_model_available()
+    if cnn_available:
+        print(f"✓ CNN model found: {cnn_path_or_error}")
+    else:
+        print(f"⚠ CNN model not found: {cnn_path_or_error}")
+        print("  Written answers will not be extracted automatically")
+    
+    # 4. Extract keys from filled sheets
+    sheet_dict = {
+        'A': 'filled_sheets/answer_sheet_A.png',
+        'B': 'filled_sheets/answer_sheet_B.png',
+        'C': 'filled_sheets/answer_sheet_C.png',
+        'D': 'filled_sheets/answer_sheet_D.png',
+        'E': 'filled_sheets/answer_sheet_E.png'
+    }
+    
+    # Check which sheets exist
+    existing_sheets = {}
+    for key, path in sheet_dict.items():
+        if os.path.exists(path):
+            existing_sheets[key] = path
+            print(f"✓ Sheet found for Key {key}: {path}")
+        else:
+            print(f"✗ Sheet not found for Key {key}: {path}")
+    
+    if existing_sheets:
+        # Extract with debug windows suppressed to avoid OpenCV errors
+        success, error, results = flow.extract_all_keys_from_sheets(
+            sheet_images_dict=existing_sheets,
+            threshold_percent=90,
+            debug=False,
+            suppress_debug_windows=True
+        )
+        
+        # Check for missing written answers
+        missing = flow.get_missing_written_answers()
+        if missing:
+            print(f"\n⚠ Missing written answers:")
+            for key, questions in missing.items():
+                print(f"  Key {key}: Questions {', '.join(questions)}")
+            
+            # You could prompt the user to enter these manually here
+            # For example:
+            # for key, questions in missing.items():
+            #     for q in questions:
+            #         answer = input(f"Enter answer for Key {key}, Q{q}: ")
+            #         flow.manual_set_written_answer(key, int(q), answer)
+    else:
+        print("\n✗ No sheet images found for extraction")
+    
+    # 5. Save all keys to a complete exam file
+    success, error, save_result = flow.save_exam_answer_keys(
+        filename="Exam_1_Extracted_Keys.json",
+        save_directory="files/answer_keys"
+    )
+    
+    if success:
+        print(f"\n{'='*70}")
+        print(f"✓ ALL KEYS SAVED SUCCESSFULLY")
+        print(f"{'='*70}")
+        print(f"File: {save_result['file_path']}")
+        if save_result['exam_id']:
+            print(f"Exam ID: {save_result['exam_id']}")
+        print(f"Keys: {', '.join(flow.answer_keys.keys())}")
+        
+        # Show what was extracted
+        for letter, key in flow.answer_keys.items():
+            progress = key.get_progress()
+            print(f"\nKey {letter}:")
+            print(f"  MCQ: {progress['mcq']['answered']}/{progress['mcq']['total']}")
+            print(f"  Written: {progress['written']['answered']}/{progress['written']['total']}")
+    else:
+        print(f"\n✗ Failed to save keys: {error}")
+
+
+if __name__ == "__main__":
+    # Run example if executed directly
+    if EXTRACTION_AVAILABLE:
+        example_extract_key_from_sheet()
+    else:
+        print("Answer extraction module not available. Install required dependencies.")
+        print("Required: OpenCV, NumPy, and answer_extraction module")
