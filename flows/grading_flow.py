@@ -177,7 +177,7 @@ class GradingFlow:
             # 1) Extract answers using the correct processor
             processor = AnswerSheetProcessor(
                 template_path=self.template_path,
-                cnn_model_path="core/models/cnn_model.h5"
+                cnn_model_path="core/cnn_model/cnn_model.h5"
             )
             
             extraction_result = processor.process_sheet(

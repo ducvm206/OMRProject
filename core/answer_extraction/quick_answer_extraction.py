@@ -421,7 +421,7 @@ class QuickAnswerExtraction:
 def main():
     """Example usage with debug mode"""
     scanner = QuickAnswerExtraction(
-        model_path="core/models/cnn_model.h5",
+        model_path="core/cnn_model/cnn_model.h5",
         template_path="files/template/answer_sheet_30mcq_6written_complete_template.json",
     )
 

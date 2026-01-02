@@ -480,10 +480,10 @@ class AnswerKeyFlow:
             # Find CNN model path
             cnn_model_path = None
             possible_paths = [
-                os.path.join(get_project_root(), 'core', 'models', 'cnn_model.h5'),
-                os.path.join(get_project_root(), 'files', 'core', 'models', 'cnn_model.h5'),
-                'core/models/cnn_model.h5',
-                'files/core/models/cnn_model.h5'
+                os.path.join(get_project_root(), 'core', 'cnn_model', 'cnn_model.h5'),
+                os.path.join(get_project_root(), 'files', 'core', 'cnn_model', 'cnn_model.h5'),
+                'core/cnn_model/cnn_model.h5',
+                'files/core/cnn_model/cnn_model.h5'
             ]
             
             for path in possible_paths:
@@ -1053,10 +1053,10 @@ class AnswerKeyFlow:
             Tuple of (is_available, model_path_or_error_message)
         """
         possible_paths = [
-            os.path.join(get_project_root(), 'core', 'models', 'cnn_model.h5'),
-            os.path.join(get_project_root(), 'files', 'core', 'models', 'cnn_model.h5'),
-            'core/models/cnn_model.h5',
-            'files/core/models/cnn_model.h5'
+            os.path.join(get_project_root(), 'core', 'cnn_model', 'cnn_model.h5'),
+            os.path.join(get_project_root(), 'files', 'core', 'cnn_model', 'cnn_model.h5'),
+            'core/cnn_model/cnn_model.h5',
+            'files/core/cnn_model/cnn_model.h5'
         ]
         
         for path in possible_paths:

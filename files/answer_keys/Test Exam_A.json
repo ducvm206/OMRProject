@@ -1,17 +1,13 @@
 {
   "metadata": {
-    "exam_name": "Exam 1",
-    "key_label": "A",
-    "mcq_count": 30,
-    "mcq_max_points": 5,
-    "written_count": 5,
-    "written_max_points": 5,
-    "total_max_points": 10,
-    "imported_from": "Exam_1_20251206_180714.json",
-    "imported_at": "2025-12-06T18:07:14.542554"
+    "exam_name": "Test Exam",
+    "key_letter": "A",
+    "created_at": "2025-12-29T16:26:23.127995",
+    "template_used": "template/answer_sheet_30mcq_5written_complete_template.json"
   },
-  "mcq": {
-    "answer_key": {
+  "answers": {
+    "key_letter": "A",
+    "mcq_answers": {
       "1": [
         "A"
       ],
@@ -102,15 +98,13 @@
       "30": [
         "A"
       ]
-    }
-  },
-  "written": {
-    "answer_key": {
+    },
+    "written_answers": {
       "31": 1.0,
-      "32": 1.0,
-      "33": 1.0,
-      "34": 1.0,
-      "35": 1.0
+      "32": 2.0,
+      "33": 3.0,
+      "34": 4.0,
+      "35": 5.0
     }
   }
 }

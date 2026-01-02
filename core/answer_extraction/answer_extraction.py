@@ -11,7 +11,7 @@ Usage:
     
     processor = AnswerSheetProcessor(
         template_path='template/sheet_template.json',
-        cnn_model_path='core/models/cnn_model.h5'
+        cnn_model_path='core/cnn_model/cnn_model.h5'
     )
     
     result = processor.process_sheet(
@@ -705,7 +705,7 @@ def main():
     
     # Configuration
     template_path = 'template/test_sheet_with_key_complete_template.json'
-    cnn_model_path = 'core/models/cnn_model.h5'
+    cnn_model_path = 'core/cnn_model/cnn_model.h5'
     test_image = 'filled_sheet.png'
     
     # Validate files exist
